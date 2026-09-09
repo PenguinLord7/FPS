@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>Pulse Arena — online FPS</title>
+<link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+
+  <!-- Three.js canvas is injected here -->
+  <div id="scene-container"></div>
+
+  <!-- In-game HUD -->
+  <div id="hud" class="hidden">
+    <div id="crosshair"><span></span><i></i></div>
+    <div id="hitmarker" class="hidden"></div>
+
+    <div id="feed"></div>
+
+    <div id="statusbar">
+      <div id="hpwrap">
+        <div id="hpfill"></div>
+        <div id="hptext">100</div>
+      </div>
+      <div id="plabel">—</div>
+      <div id="wlabel">VK-9 · PULSE RIFLE</div>
+      <div id="wammo">∞</div>
+    </div>
+
+    <div id="damage"></div>
+    <div id="lowhp"></div>
+  </div>
+
+  <!-- Scoreboard (Tab) -->
+  <div id="scoreboard" class="hidden">
+    <div class="sb-title">SCOREBOARD</div>
+    <div id="sbtable"></div>
+  </div>
+
+  <!-- Death screen -->
+  <div id="death" class="hidden">
+    <div id="deathtext">ELIMINATED</div>
+    <div id="deathsub">Respawning…</div>
+    <div id="deathcount">3</div>
+  </div>
+
+  <!-- Pause / pointer-lock hint -->
+  <div id="pause" class="hidden">
+    <div class="panel small">
+      <div class="ptitle">PAUSED</div>
+      <p>Click the arena to resume &amp; re-capture your mouse.</p>
+    </div>
+  </div>
+
+  <!-- Main menu -->
+  <div id="menu">
+    <div class="panel">
+      <div class="logo">PULSE<span>ARENA</span></div>
+      <p class="sub">a tiny browser FPS — Three.js client · Python server</p>
+
+      <label>Nickname
+        <input id="name" type="text" maxlength="14" spellcheck="false" placeholder="Soldier"/>
+      </label>
+
+      <label>Server address
+        <input id="server" type="text" spellcheck="false" value="ws://localhost:8765"/>
+      </label>
+
+      <button id="play">▶ &nbsp;DEPLOY</button>
+
+      <div id="mstatus"></div>
+
+      <ul class="hint">
+        <li><b>WASD</b> move · <b>Shift</b> run · <b>Space</b> jump</li>
+        <li><b>Mouse</b> aim · <b>LMB</b> fire · <b>Tab</b> scoreboard</li>
+        <li><b>Esc</b> release mouse</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Connection toast -->
+  <div id="toast" class="hidden"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
