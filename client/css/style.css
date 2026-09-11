@@ -72,6 +72,13 @@ body {
 .hint { list-style: none; margin-top: 20px; font-size: 12.5px; color: #7e8aa0; line-height: 1.9; }
 .hint b { color: #c6d0de; font-weight: 600; }
 
+.fieldhint { font-size: 11.5px; color: #7e8aa0; margin-top: 8px; line-height: 1.65; }
+.fieldhint code {
+  background: #0e141f; border: 1px solid var(--line); border-radius: 4px;
+  padding: 1px 5px; color: #c6d0de; font-size: 11px;
+}
+.fieldhint code b { color: var(--accent); }
+
 #mstatus { margin-top: 14px; min-height: 18px; font-size: 13px; color: var(--warn); text-align: center; }
 #mstatus.ok { color: var(--good); }
 #mstatus.err { color: #ff8a80; }

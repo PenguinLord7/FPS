@@ -4,9 +4,8 @@
  * Game traffic flows directly between players over RTCDataChannels; the
  * Python signalling server only brokers the connection (offers/answers/ICE).
  *
- * Exposes the same event surface as FPSNet so game.js doesn't care which
- * transport is in use:
- *   open, close, status, welcome, joined, left, snap, shot, hit, kill, respawn
+ * Events: open, close, status, welcome, joined, left, snap, shot, hit, kill,
+ * respawn, peerOpen
  * =================================================================== */
 "use strict";
 
@@ -29,10 +28,11 @@ class P2PNet {
     this.color = "#ffffff";
     this.peers = new Map();      // peerId -> { id, name, color, pc, dc, open, pending, remoteSet }
     this.known = new Map();      // peerId -> { name, color } announced via signalling
+    this._earlyCand = new Map(); // peerId -> ICE candidates that arrived before the SDP
     this._timer = null;
   }
 
-  /* ---------------- event plumbing (same API as FPSNet) ---------------- */
+  /* ---------------- event plumbing ---------------- */
   on(type, fn) {
     if (!this.handlers.has(type)) this.handlers.set(type, []);
     this.handlers.get(type).push(fn);
@@ -233,6 +233,12 @@ class P2PNet {
       pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
         .then(() => {
           rec.remoteSet = true;
+          // flush candidates that raced ahead of the SDP
+          const early = this._earlyCand.get(from);
+          if (early) {
+            this._earlyCand.delete(from);
+            early.forEach((c) => pc.addIceCandidate(c).catch(() => {}));
+          }
           rec.pending.forEach((c) => pc.addIceCandidate(c).catch(() => {}));
           rec.pending = [];
           if (data.sdp.type === "offer") {
@@ -243,8 +249,14 @@ class P2PNet {
         })
         .catch((e) => console.warn("sdp failed", e));
     } else if (data.candidate) {
-      if (!rec) return;   // candidate before the offer — will be re-sent
       const cand = new RTCIceCandidate(data.candidate);
+      if (!rec) {
+        // ICE can start before the SDP is delivered — keep the candidate for later
+        const arr = this._earlyCand.get(from) || [];
+        arr.push(cand);
+        this._earlyCand.set(from, arr);
+        return;
+      }
       if (rec.remoteSet) rec.pc.addIceCandidate(cand).catch(() => {});
       else rec.pending.push(cand);
     }
@@ -256,6 +268,7 @@ class P2PNet {
     try { if (rec.dc) rec.dc.close(); } catch (e) { /* ignore */ }
     try { rec.pc.close(); } catch (e) { /* ignore */ }
     this.peers.delete(id);
+    this._earlyCand.delete(id);
   }
 
   _dropAllPeers() {

@@ -6,51 +6,48 @@ const UI = {
 
   // ---------- menu ----------
   readConfig() {
+    const serverEl = this.$("server");
+    const nameEl = this.$("name");
     return {
-      name: (this.$("name").value || "").trim(),
-      server: (this.$("server").value || "").trim() || this.defaultServer(this.$("mode").value),
-      mode: this.$("mode").value === "relay" ? "relay" : "p2p",
-      room: (this.$("room").value || "").trim() || CFG.p2p.defaultRoom,
+      name: (nameEl && nameEl.value || "").trim(),
+      server: (serverEl && serverEl.value || "").trim(),
     };
   },
 
-  /* port 8765 = P2P signalling, 8766 = relay game server */
-  defaultServer(mode) {
-    const host = (location.protocol === "http:" || location.protocol === "https:")
-      ? location.hostname : "localhost";
-    return "ws://" + host + ":" + (mode === "relay" ? 8766 : 8765);
+  /* "wss://host:8765/arena" -> { url: "wss://host:8765", room: "arena" } */
+  parseServer(raw) {
+    let s = (raw || "").trim();
+    if (!s) return null;
+    if (!/^[a-z]+:\/\//i.test(s)) s = (location.protocol === "https:" ? "wss://" : "ws://") + s;
+    let u;
+    try { u = new URL(s); } catch (e) { return null; }
+    if (u.protocol !== "ws:" && u.protocol !== "wss:") return null;
+    const room = decodeURIComponent(u.pathname.replace(/^\/+/, "")).trim() || CFG.p2p.defaultRoom;
+    return { url: u.protocol + "//" + u.host, room: room, secure: u.protocol === "wss:" };
+  },
+
+  /* a sane starting value for wherever the page happens to be running */
+  defaultServer() {
+    const local = location.hostname === "localhost" || location.hostname === "127.0.0.1"
+      || location.protocol === "file:";
+    const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+    if (local) return "ws://localhost:8765/" + CFG.p2p.defaultRoom;
+    return scheme + location.hostname + ":8765/" + CFG.p2p.defaultRoom;
   },
 
   rememberName() {
     try {
-      this.$("name").value = localStorage.getItem("pa_name") || "";
-      this.$("room").value = localStorage.getItem("pa_room") || CFG.p2p.defaultRoom;
-      const mode = localStorage.getItem("pa_mode");
-      if (mode === "relay" || mode === "p2p") this.$("mode").value = mode;
-      const server = localStorage.getItem("pa_server_" + this.$("mode").value);
-      this.$("server").value = server || this.defaultServer(this.$("mode").value);
+      const nameEl = this.$("name"), srvEl = this.$("server");
+      if (nameEl) nameEl.value = localStorage.getItem("pa_name") || "";
+      if (srvEl) srvEl.value = localStorage.getItem("pa_server") || this.defaultServer();
     } catch (e) { /* ignore */ }
   },
 
-  saveName(name) {
+  saveSession(name, server) {
     try {
       localStorage.setItem("pa_name", name);
-      localStorage.setItem("pa_room", this.$("room").value.trim());
-      localStorage.setItem("pa_mode", this.$("mode").value);
-      localStorage.setItem("pa_server_" + this.$("mode").value, this.$("server").value.trim());
+      localStorage.setItem("pa_server", server);
     } catch (e) { /* ignore */ }
-  },
-
-  /* keep the address field in step with the chosen transport */
-  bindMode() {
-    const el = this.$("mode");
-    if (!el) return;
-    el.addEventListener("change", () => {
-      const mode = el.value;
-      let saved = null;
-      try { saved = localStorage.getItem("pa_server_" + mode); } catch (e) { /* ignore */ }
-      this.$("server").value = saved || this.defaultServer(mode);
-    });
   },
   showMenu() { this.$("menu").classList.remove("hidden"); },
   hideMenu() { this.$("menu").classList.add("hidden"); },

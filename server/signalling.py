@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import random
+import ssl
 
 import websockets
 
@@ -158,16 +159,29 @@ async def connection(ws) -> None:
 
 
 async def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Pulse Arena P2P signalling server")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--certfile", help="TLS certificate (PEM) to serve wss://")
+    ap.add_argument("--keyfile", help="TLS private key (PEM) to serve wss://")
     args = ap.parse_args()
 
+    ssl_ctx = None
+    scheme = "ws"
+    if args.certfile:
+        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_ctx.load_cert_chain(args.certfile, args.keyfile)
+        scheme = "wss"
+
     async with websockets.serve(connection, args.host, args.port,
+                                ssl=ssl_ctx,
                                 max_size=1 << 20,
                                 ping_interval=20,
                                 ping_timeout=20):
-        log.info("P2P signalling server listening on ws://%s:%d", args.host, args.port)
+        log.info("signalling server listening on %s://%s:%d", scheme, args.host, args.port)
+        if scheme == "ws":
+            log.info("note: pages served over HTTPS (e.g. GitHub Pages) can only reach wss:// — "
+                     "pass --certfile/--keyfile, or tunnel this port")
         await asyncio.Future()
 
 

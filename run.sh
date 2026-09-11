@@ -7,7 +7,6 @@ set -u
 cd "$(dirname "$0")"
 
 PORT_SIGNAL=8765
-PORT_RELAY=8766
 PORT_WEB=8000
 
 # --- pick a python, creating a venv + installing deps if needed -------------
@@ -32,12 +31,8 @@ fi
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
 if port_busy "$PORT_SIGNAL"; then
-  echo "!! Port $PORT_SIGNAL is already in use — the P2P signalling server is probably already running."
+  echo "!! Port $PORT_SIGNAL is already in use — the signalling server is probably already running."
   echo "   Either play against the server that's up, or stop it first (Ctrl-C in its terminal)."
-  exit 1
-fi
-if port_busy "$PORT_RELAY"; then
-  echo "!! Port $PORT_RELAY is already in use — the relay server is probably already running."
   exit 1
 fi
 if port_busy "$PORT_WEB"; then
@@ -46,31 +41,35 @@ if port_busy "$PORT_WEB"; then
 fi
 
 echo "=============================================================="
-echo "  PULSE ARENA"
-echo "    signalling  : ws://localhost:$PORT_SIGNAL   (P2P mode)"
-echo "    relay server: ws://localhost:$PORT_RELAY   (relay mode)"
-echo "    play here   : http://localhost:$PORT_WEB"
-echo "  (open the link in two browser tabs to play against yourself)"
+echo "  PULSE ARENA  (peer-to-peer)"
+echo "    signalling : ws://localhost:$PORT_SIGNAL"
+echo "    play here  : http://localhost:$PORT_WEB"
+echo "  Enter this in the game:  ws://localhost:$PORT_SIGNAL/arena"
 echo "  Ctrl-C to stop."
+echo "--------------------------------------------------------------"
+echo "  Playing from an HTTPS page (e.g. GitHub Pages)? Plain ws:// is"
+echo "  blocked there — you need a wss:// address. Either tunnel this"
+echo "  port (cloudflared / ngrok) or pass --certfile/--keyfile."
 echo "=============================================================="
 
-"$PY" server/signalling.py --port "$PORT_SIGNAL" &
+SIGNAL_ARGS=(--port "$PORT_SIGNAL")
+[ -n "${TLS_CERT:-}" ] && SIGNAL_ARGS+=(--certfile "$TLS_CERT" --keyfile "${TLS_KEY:-}")
+
+"$PY" server/signalling.py "${SIGNAL_ARGS[@]}" &
 SIG=$!
-"$PY" server/server.py &
-SRV=$!
 python3 client/serve.py --port "$PORT_WEB" --dir client &
 WEB=$!
 
 cleanup() {
   echo
   echo "==> shutting down…"
-  kill "$SIG" "$SRV" "$WEB" 2>/dev/null
-  wait "$SIG" "$SRV" "$WEB" 2>/dev/null
+  kill "$SIG" "$WEB" 2>/dev/null
+  wait "$SIG" "$WEB" 2>/dev/null
 }
 trap cleanup EXIT INT TERM
 
-# exit (and clean up) if any process dies
-while kill -0 "$SIG" 2>/dev/null && kill -0 "$SRV" 2>/dev/null && kill -0 "$WEB" 2>/dev/null; do
+# exit (and clean up) if either process dies
+while kill -0 "$SIG" 2>/dev/null && kill -0 "$WEB" 2>/dev/null; do
   sleep 1
 done
 exit 1

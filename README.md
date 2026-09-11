@@ -1,17 +1,18 @@
 # Pulse Arena — a tiny online FPS
 
-A simple multiplayer first-person shooter:
-- **JavaScript (Three.js)** — 3D rendering, first-person movement, shooting FX, all client-side.
-- **Peer-to-peer by default** — players exchange game traffic directly over WebRTC data
-  channels; the Python server only brokers the connection.
-- **Python (`websockets`)** — acts as the P2P *signalling* server, and can still run the
-  original server-hosted **relay** mode as a fallback.
+A simple multiplayer first-person shooter. It is **fully peer-to-peer**: players
+connect straight to each other over WebRTC data channels, and no game traffic passes
+through a server.
+
+- **JavaScript (Three.js)** — 3D rendering, first-person movement, shooting FX.
+- **WebRTC mesh** — positions, shots, hits, kills and respawns go peer to peer.
+- **Python (`websockets`)** — a *signalling* server: it puts players in a room and
+  brokers the WebRTC handshake. That's all it does.
 
 ```
 FPS/
 ├── server/
-│   ├── signalling.py      # P2P: rooms + WebRTC offer/answer/ICE relay (no game data)
-│   ├── server.py          # optional relay mode: authoritative game server
+│   ├── signalling.py      # rooms + WebRTC offer/answer/ICE relay (no game data)
 │   └── requirements.txt
 ├── client/
 │   ├── index.html         # menu + HUD + loads the game scripts
@@ -21,29 +22,34 @@ FPS/
 │       ├── config.js      # settings + static level data
 │       ├── audio.js       # WebAudio synth SFX (no asset files)
 │       ├── ui.js          # HUD / menu / feed / scoreboard helpers
-│       ├── net.js         # relay transport (websocket w/ reconnect)
-│       ├── rtc.js         # P2P transport (WebRTC mesh)
+│       ├── rtc.js         # the P2P transport (WebRTC mesh)
 │       └── game.js        # Three.js engine, physics, players, shooting
-└── tests/
-    └── smoke_test.py      # scripted 2-client check for the relay server
+└── run.sh
 ```
 
-## 1. Start everything
-
-One command starts the signalling server, the optional relay server and the web server:
+## 1. Quick start (playing locally / on a LAN)
 
 ```bash
 ./run.sh
 ```
 
 ```
-  signalling  : ws://localhost:8765   (P2P mode)
-  relay server: ws://localhost:8766   (relay mode)
-  play here   : http://localhost:8000
+  signalling : ws://localhost:8765
+  play here  : http://localhost:8000
 ```
 
-Then open **http://localhost:8000**, pick a nickname, and hit **DEPLOY**. Open a second
-browser tab (or a browser on another machine) to play against yourself.
+Open **http://localhost:8000**, enter a nickname, and use:
+
+```
+ws://localhost:8765/arena
+```
+
+as the **Server / room** address. Open a second tab (or a browser on another machine on
+your LAN, using your machine's IP) to play against yourself.
+
+> The address is one field: `host:port/room`. Everything after the `/` is the room name,
+> so `wss://my-host:8765/duel` puts you in room `duel`. Everyone who types the same
+> address ends up in the same match.
 
 <details>
 <summary>Or start the pieces manually</summary>
@@ -51,40 +57,76 @@ browser tab (or a browser on another machine) to play against yourself.
 ```bash
 cd server
 pip install -r requirements.txt
-python signalling.py          # P2P signalling on ws://0.0.0.0:8765
-python server.py              # optional relay mode on ws://0.0.0.0:8766
+python signalling.py              # ws://0.0.0.0:8765
 
-# serve the client on http://localhost:8000
 cd ../client
-python serve.py               # caching disabled, so edits always take effect
+python serve.py                   # http://localhost:8000 (caching disabled)
 ```
 </details>
 
-You can also just open `client/index.html` directly (WebSockets work from `file://`).
+You can also just open `client/index.html` directly — `ws://` works from `file://`.
 
-### Playing with friends
+## 2. Playing from GitHub Pages (or any HTTPS site)
 
-1. Everyone sets the **same Room** name.
-2. P2P mode needs a reachable signalling address. When the page is served over HTTP the
-   field auto-fills with the page's own host on port 8765, so a friend on your LAN just
-   visits `http://<your-ip>:8000` and hits DEPLOY — nothing else to configure.
-3. Across the internet you also need the signalling port reachable, and WebRTC must be
-   able to punch through NAT. A public STUN server is configured by default, which
-   covers most home networks; strict/symmetric NATs would need a TURN server added to
-   `CFG.p2p.iceServers` in `client/js/config.js`.
+**GitHub Pages can only serve static files — it cannot run the signalling server.**
+The client files can live there, but the game still needs a signalling address, and
+because an HTTPS page cannot open a plain `ws://` connection (the browser blocks it as
+mixed content), that address must be **`wss://`** (secure WebSocket).
 
-### P2P vs Relay
+The game checks this for you and tells you if the address is wrong.
 
-The menu's **Mode** selector picks the transport:
+### Easiest: the tunnel helper
 
-| | **P2P** (default) | **Relay** |
-|---|---|---|
-| Game traffic | direct between browsers (WebRTC) | through the Python server |
-| Server role | signalling only | authoritative |
-| Who owns HP/kills | each player owns their own health | the server |
-| Best for | LAN / small groups, no host burden | strict NATs, anti-cheat, always works |
+You have a GitHub Pages client but no server? Run one command:
 
-Both modes use the identical client protocol, so gameplay is the same either way.
+```bash
+./tunnel.sh                 # or: ./tunnel.sh myroom
+```
+
+It starts the signalling server, opens a free Cloudflare tunnel, and prints the exact
+address to paste into the game:
+
+```
+===============================================================
+  PASTE THIS INTO THE GAME'S "Server / room" FIELD:
+
+      wss://something-random-words.trycloudflare.com/arena
+===============================================================
+```
+
+Share that address with your friends — it works from the GitHub Pages client, needs no
+domain, no account and no port forwarding. The first run downloads `cloudflared` into
+`.tools/` (a single binary; nothing is installed system-wide).
+
+Worth knowing:
+
+- Keep the script running while you play. Once players have connected, the game traffic
+  goes **directly** between them — the tunnel is only used for the handshake.
+- The free URL **changes every time you restart** the script, so send the new one.
+- It has to be `wss://`; that's what the script prints.
+
+### Alternatives
+
+**Run it on a VPS/domain you own** with a certificate (e.g. Let's Encrypt) for a
+permanent address:
+
+```bash
+python server/signalling.py --port 8765 \
+    --certfile /etc/letsencrypt/live/example.com/fullchain.pem \
+    --keyfile  /etc/letsencrypt/live/example.com/privkey.pem
+```
+
+**Put it behind a TLS reverse proxy** (nginx / Caddy) and use
+`wss://your-domain/some-room`.
+
+**Use your own tunnel** — `ngrok http 8765` does the same job as `./tunnel.sh`; then use
+`wss://<ngrok-host>/<room>`.
+
+### NAT note
+
+WebRTC has to punch through NAT. A public STUN server is configured by default, which
+covers most home networks. A strict/symmetric NAT can still fail to connect — that
+would need a TURN server, added to `CFG.p2p.iceServers` in `client/js/config.js`.
 
 ## Controls
 
@@ -104,7 +146,7 @@ spawn point.
 
 ## How it works
 
-### P2P mode (default)
+### The signalling handshake
 
 The Python server only runs the signalling handshake:
 
@@ -125,24 +167,6 @@ Once the `RTCDataChannel` is open, the game is fully peer-to-peer:
 A claimed hit is still sanity-checked by the victim (the shot must actually pass near
 it), and the shooter's own raycast decides what it hit locally.
 
-### Relay mode
-
-**Client → server**
-- `join` — handshake with nickname
-- `state` — position + facing (sent ~20×/s)
-- `shoot` — origin/direction + which player your raycast hit (if any)
-
-**Server → clients**
-- `welcome` / `joined` / `left` — session & presence
-- `snap` — full player state broadcast ~20×/s (positions are interpolated on the client)
-- `shot` — replay a tracer for every shot so everyone sees the bullets
-- `hit` / `kill` / `respawn` — damage, eliminations and auto-respawns
-
-The client does the fine-grained raycast (against the world + other players' hit
-spheres) so shooting feels instant; the server re-checks every shot — shooter alive,
-fire-rate cooldown, and a ray-vs-victim test that rejects hits aimed nowhere near the
-target — and owns HP / kills / respawns.
-
 ### Models
 
 The first-person weapon is a faceted low-poly rifle (mustard-yellow receiver,
@@ -150,14 +174,13 @@ handguard, stock and grip with a dark slate barrel, rail, sights, magazine and
 buttpad). Other players are drawn as a capsule with two floating cube "hands" holding
 the same rifle, plus an overhead name/health tag.
 
-## Tests
+## Troubleshooting
 
-With the server running:
-
-```bash
-cd tests
-python smoke_test.py     # expects the server on 127.0.0.1:8765
-```
-
-It connects two fake clients, makes one shoot the other and asserts that `hit`,
-`kill`, `snap` and `respawn` messages all arrive.
+| Symptom | Cause |
+|---|---|
+| **DEPLOY does nothing** | The 3D engine (Three.js) couldn't be fetched from any CDN. The menu now says so — check your connection/ad-blocker and reload. |
+| "Can't reach `wss://…`" | The signalling server isn't running, or the address/port is wrong. |
+| Address rejected on an HTTPS page | An HTTPS page can only open `wss://`, never `ws://`. See section 2. |
+| "GitHub Pages can't run the signalling server" | Point the address at a tunnel/VPS from section 2. |
+| Connected, but you never see the other player | You're in different **rooms** (the part after the `/` in the address). |
+| Mouse doesn't look around | Some embedded browsers block pointer lock; the game switches to *mouse steering* automatically — move the cursor away from the centre to turn, and press `V` to retry capture. |

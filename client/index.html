@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 <title>Pulse Arena — online FPS</title>
-<link rel="stylesheet" href="css/style.css?v=3"/>
+<link rel="stylesheet" href="css/style.css?v=4"/>
 </head>
 <body>
 
@@ -65,20 +65,14 @@
         <input id="name" type="text" maxlength="14" spellcheck="false" placeholder="Soldier"/>
       </label>
 
-      <label>Mode
-        <select id="mode">
-          <option value="p2p">P2P — peer-to-peer (no game server)</option>
-          <option value="relay">Relay — server-hosted</option>
-        </select>
+      <label>Server / room
+        <input id="server" type="text" spellcheck="false" autocomplete="off"
+               placeholder="wss://your-host:8765/arena"/>
       </label>
-
-      <label>Room
-        <input id="room" type="text" maxlength="24" spellcheck="false" value="arena"/>
-      </label>
-
-      <label>Server address
-        <input id="server" type="text" spellcheck="false" value="ws://localhost:8765"/>
-      </label>
+      <div class="fieldhint" id="serverhint">
+        <code>host:port<b>/room</b></code> — everyone who types the same address meets
+        in the same match. The part after the <code>/</code> is the room.
+      </div>
 
       <button id="play">▶ &nbsp;DEPLOY</button>
 
@@ -88,7 +82,7 @@
         <li><b>WASD</b> move · <b>Shift</b> run · <b>Space</b> jump</li>
         <li><b>Mouse</b> aim · <b>LMB</b> fire · <b>Tab</b> scoreboard</li>
         <li><b>Esc</b> release mouse · <b>V</b> toggle mouse capture</li>
-        <li>Friends need the same <b>room</b> name to meet up</li>
+        <li>Peers connect <b>directly</b> to each other (WebRTC)</li>
       </ul>
     </div>
   </div>
@@ -96,12 +90,10 @@
   <!-- Connection toast -->
   <div id="toast" class="hidden"></div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="js/config.js?v=3"></script>
-  <script src="js/audio.js?v=3"></script>
-  <script src="js/ui.js?v=3"></script>
-  <script src="js/net.js?v=3"></script>
-  <script src="js/rtc.js?v=3"></script>
-  <script src="js/game.js?v=3"></script>
+  <script src="js/config.js?v=4"></script>
+  <script src="js/audio.js?v=4"></script>
+  <script src="js/ui.js?v=4"></script>
+  <script src="js/rtc.js?v=4"></script>
+  <script src="js/game.js?v=4"></script>
 </body>
 </html>

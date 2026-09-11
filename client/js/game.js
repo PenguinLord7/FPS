@@ -8,7 +8,6 @@
 
 /* ---------------- helpers ---------------- */
 const CFG = window.CFG;
-const UP = new THREE.Vector3(0, 1, 0);
 const EPS = 1e-3;
 
 const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -28,20 +27,30 @@ let blockMeshes = [];      // static geometry (visual + raycast blockers)
 let colliders = [];        // axis-aligned footprints for player collision
 let tracers = [];          // active tracer beams
 let gunGroup, gunTip, muzzleSprite, muzzleLight, muzzleTex;
-let clock = new THREE.Clock();
+let clock;
 let unloadBound = false;
 
 const GUN_BASE = { x: 0.26, y: -0.30, z: -0.30 };  // viewmodel rest position
 
-const _fwd = new THREE.Vector3();
-const _right = new THREE.Vector3();
-const _want = new THREE.Vector3();
-const _shootDir = new THREE.Vector3();
-const _hitPoint = new THREE.Vector3();
-const _muzzle = new THREE.Vector3();
-const _traceDir = new THREE.Vector3();
+/* These need THREE, which is fetched at boot (with CDN fallbacks). They stay
+ * undefined until initThreeRefs() runs — nothing may touch them before that, so
+ * failing to load the engine can never stop the menu from responding. */
+let UP, _fwd, _right, _want, _shootDir, _hitPoint, _muzzle, _traceDir, raycaster;
 
-const raycaster = new THREE.Raycaster();
+function initThreeRefs() {
+  UP = new THREE.Vector3(0, 1, 0);
+  clock = new THREE.Clock();
+  _fwd = new THREE.Vector3();
+  _right = new THREE.Vector3();
+  _want = new THREE.Vector3();
+  _shootDir = new THREE.Vector3();
+  _hitPoint = new THREE.Vector3();
+  _muzzle = new THREE.Vector3();
+  _traceDir = new THREE.Vector3();
+  raycaster = new THREE.Raycaster();
+  state.pos = new THREE.Vector3(0, 0, 20);
+  state.vel = new THREE.Vector3();
+}
 
 /* shared material palette (guns + player hands) */
 const MATS = {};
@@ -65,8 +74,8 @@ const state = {
   maxHp: 100,
   kills: 0,
   alive: true,
-  pos: new THREE.Vector3(0, 0, 20),
-  vel: new THREE.Vector3(),
+  pos: null,         // THREE.Vector3 — created with the engine (see initThreeRefs)
+  vel: null,
   yaw: 0,            // default camera looks down -Z, toward arena centre
   pitch: 0,
   recoil: 0,
@@ -84,8 +93,7 @@ const state = {
   uiTimer: 0,
   offline: false,
   offlineNotified: false,
-  p2p: false,          // true when running on the WebRTC mesh backend
-  respawnAt: 0,        // P2P: when we respawn ourselves
+  respawnAt: 0,        // when we respawn ourselves after a death
 };
 
 /* remote players keyed by server id */
@@ -94,6 +102,7 @@ let net = null;
 
 /* ---------------- init ---------------- */
 function initEngine() {
+  initThreeRefs();
   container = document.getElementById("scene-container");
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -128,7 +137,6 @@ function initEngine() {
   initMaterials();
   buildGun();
   bindInput();
-  wireMenu();
   window.addEventListener("resize", onResize);
 
   clock.start();
@@ -301,29 +309,68 @@ function gunTipWorld(out) {
 
 /* ---------------- menu / session ---------------- */
 function wireMenu() {
+  if (wireMenu._bound) return;
+  wireMenu._bound = true;
   UI.rememberName();
-  UI.bindMode();
+
   const play = () => {
-    const cfg = UI.readConfig();
-    if (!cfg.name) { UI.setMenuStatus("Please enter a nickname.", "err"); return; }
-    UI.saveName(cfg.name);
-    SFX.ensure();
-    SFX.click();
-    beginSession(cfg.name, cfg.server, cfg.mode, cfg.room);
+    try {
+      startFromMenu();
+    } catch (err) {
+      console.error(err);
+      UI.setMenuStatus("Could not start: " + (err && err.message ? err.message : err), "err");
+    }
   };
-  document.getElementById("play").addEventListener("click", play);
-  document.getElementById("name").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") play();
-  });
-  // resume from pause
-  document.getElementById("pause").addEventListener("click", lockPointer);
+  const btn = document.getElementById("play");
+  const nameEl = document.getElementById("name");
+  const srvEl = document.getElementById("server");
+  if (btn) btn.addEventListener("click", play);
+  if (nameEl) nameEl.addEventListener("keydown", (e) => { if (e.key === "Enter") play(); });
+  if (srvEl) srvEl.addEventListener("keydown", (e) => { if (e.key === "Enter") play(); });
+
+  const pause = document.getElementById("pause");
+  if (pause) pause.addEventListener("click", lockPointer);
 }
 
-function beginSession(name, server, mode, room) {
+/* Returns an error message for a bad target, or null when it's usable. */
+function validateTarget(target) {
+  if (!target) {
+    return "That server address doesn't look right. Use host:port/room — e.g. wss://my-host:8765/arena";
+  }
+  if (!target.secure && location.protocol === "https:") {
+    return "This page is served over HTTPS, so the server must be wss:// (secure WebSocket). " +
+           "Plain ws:// is blocked by the browser on HTTPS pages.";
+  }
+  if (location.hostname.endsWith("github.io") && /(^|\.)github\.io$/i.test(target.url)) {
+    return "GitHub Pages can only serve static files — it can't run the signalling server. " +
+           "Point the address at a signalling server you run (see README).";
+  }
+  return null;
+}
+
+function startFromMenu() {
+  const cfg = UI.readConfig();
+  if (!cfg.name) { UI.setMenuStatus("Please enter a nickname.", "err"); return; }
+  if (!window.THREE) {
+    UI.setMenuStatus("The 3D engine hasn't loaded yet (or failed to). Check your connection and reload.", "err");
+    return;
+  }
+
+  const target = UI.parseServer(cfg.server);
+  const problem = validateTarget(target);
+  if (problem) { UI.setMenuStatus(problem, "err"); return; }
+
+  UI.saveSession(cfg.name, cfg.server);
+  SFX.ensure();
+  SFX.click();
+  UI.setMenuStatus("", "");
+  beginSession(cfg.name, target);
+}
+
+function beginSession(name, target) {
   UI.hideMenu();
   UI.hudShow();
   UI.setHP(state.maxHp, state.maxHp);
-  UI.setMenuStatus("", "");
   state.inGame = true;
   state.name = name;
   state.stateTimer = 0;
@@ -331,19 +378,17 @@ function beginSession(name, server, mode, room) {
   state.fireHeld = false;
   state.keys = {};
   state.respawnAt = 0;
-  state.p2p = (mode === "p2p");
 
   if (net) { try { net.close(); } catch (e) { /* ignore */ } net = null; }
 
-  if (state.p2p) {
-    net = new P2PNet(server, name, { room: room, iceServers: CFG.p2p.iceServers });
-  } else {
-    net = new FPSNet(server, name);
-  }
+  net = new P2PNet(target.url, name, {
+    room: target.room,
+    iceServers: CFG.p2p.iceServers,
+  });
   wireNet(net);
   net.connect();
   UI.setNet("connecting");
-  UI.toast((state.p2p ? "Joining room " + room + " via " : "Connecting to ") + server + " …", "", 2200);
+  UI.toast("Joining room '" + target.room + "' via " + target.url + " …", "", 2600);
   lockPointer();
 }
 
@@ -471,7 +516,8 @@ function wireNet(n) {
 
   n.on("joined", (m) => {
     if (m.id === state.selfId) return;
-    ensureRemote(m);
+    // no model yet — that appears when they actually send state over the data
+    // channel, otherwise a peer that fails to connect shows as a ghost at 0,0,0
     UI.feedAdd(`<span style="color:${m.color}">${esc(m.name)}</span> joined the arena`);
   });
 
@@ -512,7 +558,7 @@ function wireNet(n) {
     } else if (m.killer === state.selfId) {
       UI.hitmark(true);
       SFX.kill();
-      if (state.p2p) state.kills++;   // P2P: we keep our own score
+      state.kills++;   // we're the authority on our own score
     }
     // hide the remote victim right away (the victim told everyone it died)
     const victimRemote = remotes.get(m.victim);
@@ -565,7 +611,7 @@ function rayNearPoint(origin, dir, point, radius) {
 
 /* a peer says they hit us — validate it against where we actually are */
 function onPeerShot(m) {
-  if (!state.p2p || !state.alive) return;
+  if (!state.alive) return;
   if (m.victim !== state.selfId) return;
   if (!Array.isArray(m.p) || !Array.isArray(m.d)) return;
   const me = [state.pos.x, state.pos.y + 1.0, state.pos.z];
@@ -1168,8 +1214,8 @@ function tick() {
     sendState(dt);
     updateHud(dt);
 
-    // P2P: we reschedule ourselves once our own timer runs out
-    if (state.p2p && !state.alive && state.respawnAt && performance.now() >= state.respawnAt) {
+    // we reschedule ourselves once our own timer runs out
+    if (!state.alive && state.respawnAt && performance.now() >= state.respawnAt) {
       state.respawnAt = 0;
       const sp = randomSpawn();
       localRespawn(sp);
@@ -1191,7 +1237,7 @@ function tick() {
     hp: state.hp, alive: state.alive,
     locked: state.locked, fireHeld: state.fireHeld,
     shotsFired: state.shotsFired, tracers: tracers.length,
-    p2p: state.p2p, directPeers: (net && net.peerCount) ? net.peerCount() : 0,
+    directPeers: (net && net.peerCount) ? net.peerCount() : 0,
     pos: [+state.pos.x.toFixed(2), +state.pos.y.toFixed(2), +state.pos.z.toFixed(2)],
   };
 
@@ -1202,24 +1248,13 @@ function updateRemotesAll(dt) {
   remotes.forEach((r) => updateRemote(r, dt));
 }
 
-/* position updates (~20 Hz) */
+/* position + health updates (~20 Hz) — we're the authority on our own player */
 function sendState(dt) {
   if (!state.connected || !state.joined) return;
-  if (!state.p2p && !state.alive) return;   // the relay ignores dead players
   state.stateTimer += dt;
   if (state.stateTimer < 0.05) return;
   state.stateTimer = 0;
-
-  if (state.p2p) {
-    // peers need our health/alive/kills too — we're the authority on them
-    net.send({ type: "state", player: buildSelfState() });
-  } else {
-    net.send({
-      type: "state",
-      p: [state.pos.x, state.pos.y, state.pos.z],
-      ry: state.yaw,
-    });
-  }
+  net.send({ type: "state", player: buildSelfState() });
 }
 
 /* HUD/scoreboard refresh — kept independent of the network timer so it keeps
@@ -1274,10 +1309,43 @@ function localRespawn(p) {
 }
 
 /* ---------------- boot ---------------- */
+/* Three.js is fetched from a CDN at runtime, with fallbacks. If every CDN is
+ * unreachable the menu must still work and say so — a dead DEPLOY button with
+ * no explanation is the worst possible failure mode. */
+const THREE_CDNS = [
+  "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js",
+  "https://unpkg.com/three@0.128.0/build/three.min.js",
+  "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js",
+];
+
+function loadThree(i, done) {
+  if (window.THREE) return done(true);
+  if (i >= THREE_CDNS.length) return done(false);
+  const s = document.createElement("script");
+  s.src = THREE_CDNS[i];
+  s.async = false;
+  s.onload = () => done(!!window.THREE);
+  s.onerror = () => loadThree(i + 1, done);
+  document.head.appendChild(s);
+}
+
+/* wire the menu as soon as the DOM is there, engine or not */
+window.addEventListener("DOMContentLoaded", () => {
+  UI.rememberName();
+  wireMenu();
+});
+
 window.addEventListener("load", () => {
-  if (!window.THREE) {
-    UI.setMenuStatus("Three.js failed to load — check your internet connection.", "err");
-    return;
-  }
-  initEngine();
+  loadThree(0, (ok) => {
+    if (!ok) {
+      UI.setMenuStatus("Couldn't load the 3D engine (Three.js) — check your connection or ad-blocker, then reload.", "err");
+      return;
+    }
+    try {
+      initEngine();
+    } catch (err) {
+      console.error(err);
+      UI.setMenuStatus("Failed to start the renderer: " + (err && err.message ? err.message : err), "err");
+    }
+  });
 });
