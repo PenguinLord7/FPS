@@ -312,6 +312,7 @@ function wireMenu() {
   if (wireMenu._bound) return;
   wireMenu._bound = true;
   UI.rememberName();
+  UI.bindRoomBadge();
 
   const play = () => {
     try {
@@ -361,10 +362,15 @@ function startFromMenu() {
   }
 
   const target = UI.parseServer(cfg.server);
+  if (target && target.needsHost) {
+    UI.setMenuStatus("Enter the full server address once (e.g. wss://your-host:8765/arena) — " +
+                     "after that you can just type room codes like 8765.", "err");
+    return;
+  }
   const problem = validateTarget(target);
   if (problem) { UI.setMenuStatus(problem, "err"); return; }
 
-  UI.saveSession(cfg.name, cfg.server);
+  UI.saveSession(cfg.name, target.room, target.url);
   SFX.ensure();
   SFX.click();
   UI.setMenuStatus("", "");
@@ -392,6 +398,7 @@ function beginSession(name, target) {
   wireNet(net);
   net.connect();
   UI.setNet("connecting");
+  UI.setRoom(target.room, target.url);
   UI.toast("Joining room '" + target.room + "' via " + target.url + " …", "", 2600);
   lockPointer();
 }

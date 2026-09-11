@@ -38,18 +38,17 @@ FPS/
   play here  : http://localhost:8000
 ```
 
-Open **http://localhost:8000**, enter a nickname, and use:
+Open **http://localhost:8000**, enter a nickname and a **room code** (any short word or
+number, e.g. `8765`), then hit **DEPLOY**. Open a second tab with the same code to play
+against yourself.
 
-```
-ws://localhost:8765/arena
-```
-
-as the **Server / room** address. Open a second tab (or a browser on another machine on
-your LAN, using your machine's IP) to play against yourself.
-
-> The address is one field: `host:port/room`. Everything after the `/` is the room name,
-> so `wss://my-host:8765/duel` puts you in room `duel`. Everyone who types the same
-> address ends up in the same match.
+> The **Room** box takes either a room code or a full server address. The first time you
+> need the address (`ws://localhost:8765/arena` locally, or the `wss://…` one your tunnel
+> prints) — it's remembered from then on, so day-to-day you just type room codes.
+>
+> While playing, the current room is shown at the **top of the screen** (`ROOM 8765`).
+> Click it to copy the full address to share with friends — everyone using the same room
+> code plays together.
 
 <details>
 <summary>Or start the pieces manually</summary>
@@ -88,7 +87,7 @@ address to paste into the game:
 
 ```
 ===============================================================
-  PASTE THIS INTO THE GAME'S "Server / room" FIELD:
+  PASTE THIS INTO THE GAME'S "ROOM" FIELD (just the first time):
 
       wss://something-random-words.trycloudflare.com/arena
 ===============================================================
@@ -97,6 +96,9 @@ address to paste into the game:
 Share that address with your friends — it works from the GitHub Pages client, needs no
 domain, no account and no port forwarding. The first run downloads `cloudflared` into
 `.tools/` (a single binary; nothing is installed system-wide).
+
+Everyone pastes it once; after that the game remembers the server and you only type the
+**room code** (`arena`, or the `8765`-style code you prefer).
 
 Worth knowing:
 

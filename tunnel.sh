@@ -105,12 +105,14 @@ WSS="wss://${URL#https://}/${ROOM}"
 
 echo
 echo "==============================================================="
-echo "  PASTE THIS INTO THE GAME'S \"Server / room\" FIELD:"
+echo "  PASTE THIS INTO THE GAME'S \"Room\" FIELD (just the first time):"
 echo
 echo "      $WSS"
 echo
 echo "  Share that exact address with your friends — everyone using"
 echo "  it lands in room '$ROOM'. It works from a GitHub Pages client."
+echo "  After pasting it once, the game remembers the server and you"
+echo "  only need to type a room code."
 [ -n "$WEB" ] && echo
 [ -n "$WEB" ] && echo "  Local copy of the game: http://localhost:$PORT_WEB"
 echo

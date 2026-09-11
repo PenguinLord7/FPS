@@ -102,12 +102,23 @@ body {
 #netstatus.offline { color: #ff8a80; border-color: rgba(255,82,82,.5); }
 
 #aimstatus {
-  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  position: absolute; top: 46px; left: 50%; transform: translateX(-50%);
   font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
   padding: 5px 12px; border-radius: 6px;
   background: rgba(8,11,18,.78); border: 1px solid rgba(64,196,255,.5);
   color: var(--accent);
 }
+
+#roomstatus {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; font-weight: 700; letter-spacing: 2px;
+  padding: 5px 12px; border-radius: 6px;
+  background: rgba(8,11,18,.72); border: 1px solid var(--line);
+  color: #8b96a8;
+  pointer-events: auto; cursor: pointer; transition: border-color .15s;
+}
+#roomstatus b { color: var(--accent); font-size: 13px; letter-spacing: 1px; }
+#roomstatus:hover { border-color: var(--accent); }
 
 #crosshair {
   position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
