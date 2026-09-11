@@ -26,21 +26,44 @@ const UI = {
     return { url: u.protocol + "//" + u.host, room: room, secure: u.protocol === "wss:" };
   },
 
+  /* hosts that can only serve static files — they cannot run a WebSocket server */
+  isStaticHost(host) {
+    return /(^|\.)(github\.io|gitlab\.io|codeberg\.page|neocities\.org)$/i.test(host || "");
+  },
+
   /* a sane starting value for wherever the page happens to be running */
   defaultServer() {
     const local = location.hostname === "localhost" || location.hostname === "127.0.0.1"
       || location.protocol === "file:";
-    const scheme = location.protocol === "https:" ? "wss://" : "ws://";
     if (local) return "ws://localhost:8765/" + CFG.p2p.defaultRoom;
-    return scheme + location.hostname + ":8765/" + CFG.p2p.defaultRoom;
+    // a static host can never be the signalling server — don't suggest it
+    if (this.isStaticHost(location.hostname)) return "";
+    return (location.protocol === "https:" ? "wss://" : "ws://") +
+      location.hostname + ":8765/" + CFG.p2p.defaultRoom;
   },
 
   rememberName() {
     try {
       const nameEl = this.$("name"), srvEl = this.$("server");
       if (nameEl) nameEl.value = localStorage.getItem("pa_name") || "";
-      if (srvEl) srvEl.value = localStorage.getItem("pa_server") || this.defaultServer();
+      if (srvEl) {
+        const saved = localStorage.getItem("pa_server") || "";
+        const savedHost = saved.replace(/^wss?:\/\//i, "").split("/")[0].split(":")[0];
+        // drop a remembered address that could never have worked
+        srvEl.value = (saved && !this.isStaticHost(savedHost)) ? saved : this.defaultServer();
+      }
+      this.hostHint();
     } catch (e) { /* ignore */ }
+  },
+
+  hostHint() {
+    const el = this.$("serverhint");
+    if (!el) return;
+    if (this.isStaticHost(location.hostname)) {
+      el.innerHTML = "This page is hosted statically (GitHub Pages), which can only serve files — " +
+        "it can't run the signalling server. Run <code>./tunnel.sh</code> on a computer you control " +
+        "and paste the <code>wss://…<b>/room</b></code> address it prints here.";
+    }
   },
 
   saveSession(name, server) {

@@ -337,13 +337,17 @@ function validateTarget(target) {
   if (!target) {
     return "That server address doesn't look right. Use host:port/room — e.g. wss://my-host:8765/arena";
   }
+  // Checked FIRST: GitHub Pages cannot serve WebSockets at all, so telling the
+  // player to "use wss://" would send them down a dead end.
+  const host = String(target.url || "").replace(/^wss?:\/\//i, "").split("/")[0].split(":")[0];
+  if (UI.isStaticHost(host)) {
+    return "GitHub Pages only serves static files — it can't run the signalling server, " +
+           "and that's true with wss:// too. Start the server on a computer you control " +
+           "(run ./tunnel.sh), then paste the wss:// address it prints here.";
+  }
   if (!target.secure && location.protocol === "https:") {
     return "This page is served over HTTPS, so the server must be wss:// (secure WebSocket). " +
            "Plain ws:// is blocked by the browser on HTTPS pages.";
-  }
-  if (location.hostname.endsWith("github.io") && /(^|\.)github\.io$/i.test(target.url)) {
-    return "GitHub Pages can only serve static files — it can't run the signalling server. " +
-           "Point the address at a signalling server you run (see README).";
   }
   return null;
 }

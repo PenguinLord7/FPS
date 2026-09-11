@@ -181,6 +181,6 @@ the same rifle, plus an overhead name/health tag.
 | **DEPLOY does nothing** | The 3D engine (Three.js) couldn't be fetched from any CDN. The menu now says so — check your connection/ad-blocker and reload. |
 | "Can't reach `wss://…`" | The signalling server isn't running, or the address/port is wrong. |
 | Address rejected on an HTTPS page | An HTTPS page can only open `wss://`, never `ws://`. See section 2. |
-| "GitHub Pages can't run the signalling server" | Point the address at a tunnel/VPS from section 2. |
+| **Address looks like the page itself** (`ws://yourname.github.io:8765`) | That host only serves files — it can never be the signalling server, and switching to `wss://` won't help either. Paste the `wss://…trycloudflare.com/room` address that `./tunnel.sh` prints. |
 | Connected, but you never see the other player | You're in different **rooms** (the part after the `/` in the address). |
 | Mouse doesn't look around | Some embedded browsers block pointer lock; the game switches to *mouse steering* automatically — move the cursor away from the centre to turn, and press `V` to retry capture. |
