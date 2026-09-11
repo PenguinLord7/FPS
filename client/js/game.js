@@ -84,6 +84,8 @@ const state = {
   uiTimer: 0,
   offline: false,
   offlineNotified: false,
+  p2p: false,          // true when running on the WebRTC mesh backend
+  respawnAt: 0,        // P2P: when we respawn ourselves
 };
 
 /* remote players keyed by server id */
@@ -300,13 +302,14 @@ function gunTipWorld(out) {
 /* ---------------- menu / session ---------------- */
 function wireMenu() {
   UI.rememberName();
+  UI.bindMode();
   const play = () => {
     const cfg = UI.readConfig();
     if (!cfg.name) { UI.setMenuStatus("Please enter a nickname.", "err"); return; }
     UI.saveName(cfg.name);
     SFX.ensure();
     SFX.click();
-    beginSession(cfg.name, cfg.server);
+    beginSession(cfg.name, cfg.server, cfg.mode, cfg.room);
   };
   document.getElementById("play").addEventListener("click", play);
   document.getElementById("name").addEventListener("keydown", (e) => {
@@ -316,7 +319,7 @@ function wireMenu() {
   document.getElementById("pause").addEventListener("click", lockPointer);
 }
 
-function beginSession(name, server) {
+function beginSession(name, server, mode, room) {
   UI.hideMenu();
   UI.hudShow();
   UI.setHP(state.maxHp, state.maxHp);
@@ -327,14 +330,20 @@ function beginSession(name, server) {
   state.uiTimer = 0;
   state.fireHeld = false;
   state.keys = {};
+  state.respawnAt = 0;
+  state.p2p = (mode === "p2p");
 
   if (net) { try { net.close(); } catch (e) { /* ignore */ } net = null; }
 
-  net = new FPSNet(server, name);
+  if (state.p2p) {
+    net = new P2PNet(server, name, { room: room, iceServers: CFG.p2p.iceServers });
+  } else {
+    net = new FPSNet(server, name);
+  }
   wireNet(net);
   net.connect();
   UI.setNet("connecting");
-  UI.toast("Connecting to " + server + " …", "", 2200);
+  UI.toast((state.p2p ? "Joining room " + room + " via " : "Connecting to ") + server + " …", "", 2200);
   lockPointer();
 }
 
@@ -388,6 +397,7 @@ function returnToMenu() {
   state.joined = false;
   state.alive = true;
   state.deathAt = 0;
+  state.respawnAt = 0;
   state.fireHeld = false;
   state.keys = {};
   UI.hideDeath();
@@ -415,11 +425,15 @@ function wireNet(n) {
 
   n.on("status", (s) => {
     if (!state.inGame) return;
-    UI.setNet("offline");
-    // only surface the failure once per outage instead of on every retry
-    if (!state.offlineNotified) {
-      state.offlineNotified = true;
-      UI.toast(s.msg, s.kind || "", 6000);
+    if (s.offline) {
+      UI.setNet("offline");
+      // only surface the failure once per outage instead of on every retry
+      if (!state.offlineNotified) {
+        state.offlineNotified = true;
+        UI.toast(s.msg, s.kind || "", 6000);
+      }
+    } else {
+      UI.toast(s.msg, s.kind || "", 2200);   // informational (e.g. peer connected)
     }
     if (s.fatal) returnToMenu();
   });
@@ -498,8 +512,9 @@ function wireNet(n) {
     } else if (m.killer === state.selfId) {
       UI.hitmark(true);
       SFX.kill();
+      if (state.p2p) state.kills++;   // P2P: we keep our own score
     }
-    // hide the remote victim right away (server has already done so)
+    // hide the remote victim right away (the victim told everyone it died)
     const victimRemote = remotes.get(m.victim);
     if (victimRemote) { victimRemote.alive = false; victimRemote.hp = 0; victimRemote.lastHp = -1; }
   });
@@ -513,10 +528,85 @@ function wireNet(n) {
     }
   });
 
+  // ---- P2P only ------------------------------------------------------- //
+  // There is no server to arbitrate in P2P, so the *victim* owns its own HP:
+  // peers send us their shots and we decide whether we were hit. That keeps
+  // each player's health out of everyone else's hands.
+  if (n.p2p) {
+    n.on("shoot", onPeerShot);
+    n.on("peerOpen", (p) => {
+      UI.feedAdd(`<span style="color:${p.color}">${esc(p.name)}</span> connected (direct)`);
+    });
+  }
+
   if (!unloadBound) {
     unloadBound = true;
     window.addEventListener("beforeunload", () => { if (net) net.close(); });
   }
+}
+
+/* ---------------------------------------------------------------------
+ * Peer-to-peer combat
+ * ------------------------------------------------------------------- */
+
+/* shortest distance between a ray and a point (mirrors the relay server) */
+function rayNearPoint(origin, dir, point, radius) {
+  const ox = origin[0], oy = origin[1], oz = origin[2];
+  let dx = dir[0], dy = dir[1], dz = dir[2];
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (len < 1e-6) return false;
+  dx /= len; dy /= len; dz /= len;
+  const px = point[0] - ox, py = point[1] - oy, pz = point[2] - oz;
+  const t = px * dx + py * dy + pz * dz;
+  if (t < 0 || t > CFG.weapon.range) return false;
+  const cx = px - t * dx, cy = py - t * dy, cz = pz - t * dz;
+  return Math.sqrt(cx * cx + cy * cy + cz * cz) <= radius;
+}
+
+/* a peer says they hit us — validate it against where we actually are */
+function onPeerShot(m) {
+  if (!state.p2p || !state.alive) return;
+  if (m.victim !== state.selfId) return;
+  if (!Array.isArray(m.p) || !Array.isArray(m.d)) return;
+  const me = [state.pos.x, state.pos.y + 1.0, state.pos.z];
+  if (!rayNearPoint(m.p, m.d, me, 1.6)) return;   // ignore wild claims
+  takeDamage(m.id, CFG.weapon.damage);
+}
+
+function takeDamage(shooterId, dmg) {
+  state.hp = Math.max(0, state.hp - dmg);
+  UI.setHP(state.hp, state.maxHp);
+  UI.setLowHp(state.hp <= 30);
+  UI.damage(dmg / 100);
+  SFX.hurt();
+  net.send({ type: "hit", shooter: shooterId, victim: state.selfId, damage: dmg, hp: state.hp });
+
+  if (state.hp > 0) return;
+
+  const shooter = remotes.get(shooterId);
+  const shooterName = shooter ? shooter.name : "another player";
+  net.send({
+    type: "kill", killer: shooterId, killerName: shooterName,
+    victim: state.selfId, victimName: state.name,
+  });
+  localDeath(shooterName);
+  // we own our own respawn in P2P
+  state.respawnAt = performance.now() + CFG.respawnTime * 1000;
+}
+
+function randomSpawn() {
+  const list = CFG.spawns;
+  const pick = list[(Math.random() * list.length) | 0];
+  return [pick[0], 0, pick[1]];
+}
+
+/* our own state, in the same shape as a relay snapshot entry */
+function buildSelfState() {
+  return {
+    id: state.selfId, name: state.name, color: state.color,
+    p: [state.pos.x, state.pos.y, state.pos.z],
+    ry: state.yaw, hp: state.hp, alive: state.alive, kills: state.kills,
+  };
 }
 
 function colorOf(id) {
@@ -866,6 +956,7 @@ function tryShoot() {
   SFX.shoot();
   net.send({
     type: "shoot",
+    id: state.selfId,
     victim: victimId,
     p: [camera.position.x, camera.position.y, camera.position.z],
     d: [_shootDir.x, _shootDir.y, _shootDir.z],
@@ -1077,6 +1168,14 @@ function tick() {
     sendState(dt);
     updateHud(dt);
 
+    // P2P: we reschedule ourselves once our own timer runs out
+    if (state.p2p && !state.alive && state.respawnAt && performance.now() >= state.respawnAt) {
+      state.respawnAt = 0;
+      const sp = randomSpawn();
+      localRespawn(sp);
+      net.send({ type: "respawn", id: state.selfId, p: sp });
+    }
+
     // death countdown
     if (!state.alive && state.deathAt) {
       const left = Math.max(0, CFG.respawnTime - (performance.now() - state.deathAt) / 1000);
@@ -1092,6 +1191,7 @@ function tick() {
     hp: state.hp, alive: state.alive,
     locked: state.locked, fireHeld: state.fireHeld,
     shotsFired: state.shotsFired, tracers: tracers.length,
+    p2p: state.p2p, directPeers: (net && net.peerCount) ? net.peerCount() : 0,
     pos: [+state.pos.x.toFixed(2), +state.pos.y.toFixed(2), +state.pos.z.toFixed(2)],
   };
 
@@ -1104,15 +1204,22 @@ function updateRemotesAll(dt) {
 
 /* position updates (~20 Hz) */
 function sendState(dt) {
-  if (!state.connected || !state.joined || !state.alive) return;
+  if (!state.connected || !state.joined) return;
+  if (!state.p2p && !state.alive) return;   // the relay ignores dead players
   state.stateTimer += dt;
   if (state.stateTimer < 0.05) return;
   state.stateTimer = 0;
-  net.send({
-    type: "state",
-    p: [state.pos.x, state.pos.y, state.pos.z],
-    ry: state.yaw,
-  });
+
+  if (state.p2p) {
+    // peers need our health/alive/kills too — we're the authority on them
+    net.send({ type: "state", player: buildSelfState() });
+  } else {
+    net.send({
+      type: "state",
+      p: [state.pos.x, state.pos.y, state.pos.z],
+      ry: state.yaw,
+    });
+  }
 }
 
 /* HUD/scoreboard refresh — kept independent of the network timer so it keeps

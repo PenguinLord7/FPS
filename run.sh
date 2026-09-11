@@ -6,7 +6,8 @@
 set -u
 cd "$(dirname "$0")"
 
-PORT_GAME=8765
+PORT_SIGNAL=8765
+PORT_RELAY=8766
 PORT_WEB=8000
 
 # --- pick a python, creating a venv + installing deps if needed -------------
@@ -30,9 +31,13 @@ fi
 # --- don't fight over ports (e.g. run.sh started twice) ---------------------
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
-if port_busy "$PORT_GAME"; then
-  echo "!! Port $PORT_GAME is already in use — the game server is probably already running."
+if port_busy "$PORT_SIGNAL"; then
+  echo "!! Port $PORT_SIGNAL is already in use — the P2P signalling server is probably already running."
   echo "   Either play against the server that's up, or stop it first (Ctrl-C in its terminal)."
+  exit 1
+fi
+if port_busy "$PORT_RELAY"; then
+  echo "!! Port $PORT_RELAY is already in use — the relay server is probably already running."
   exit 1
 fi
 if port_busy "$PORT_WEB"; then
@@ -42,12 +47,15 @@ fi
 
 echo "=============================================================="
 echo "  PULSE ARENA"
-echo "    game server : ws://localhost:$PORT_GAME"
+echo "    signalling  : ws://localhost:$PORT_SIGNAL   (P2P mode)"
+echo "    relay server: ws://localhost:$PORT_RELAY   (relay mode)"
 echo "    play here   : http://localhost:$PORT_WEB"
 echo "  (open the link in two browser tabs to play against yourself)"
 echo "  Ctrl-C to stop."
 echo "=============================================================="
 
+"$PY" server/signalling.py --port "$PORT_SIGNAL" &
+SIG=$!
 "$PY" server/server.py &
 SRV=$!
 python3 client/serve.py --port "$PORT_WEB" --dir client &
@@ -56,13 +64,13 @@ WEB=$!
 cleanup() {
   echo
   echo "==> shutting down…"
-  kill "$SRV" "$WEB" 2>/dev/null
-  wait "$SRV" "$WEB" 2>/dev/null
+  kill "$SIG" "$SRV" "$WEB" 2>/dev/null
+  wait "$SIG" "$SRV" "$WEB" 2>/dev/null
 }
 trap cleanup EXIT INT TERM
 
-# exit (and clean up) if either process dies
-while kill -0 "$SRV" 2>/dev/null && kill -0 "$WEB" 2>/dev/null; do
+# exit (and clean up) if any process dies
+while kill -0 "$SIG" 2>/dev/null && kill -0 "$SRV" 2>/dev/null && kill -0 "$WEB" 2>/dev/null; do
   sleep 1
 done
 exit 1

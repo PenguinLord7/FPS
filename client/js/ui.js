@@ -8,26 +8,49 @@ const UI = {
   readConfig() {
     return {
       name: (this.$("name").value || "").trim(),
-      server: (this.$("server").value || "").trim() || "ws://localhost:8765",
+      server: (this.$("server").value || "").trim() || this.defaultServer(this.$("mode").value),
+      mode: this.$("mode").value === "relay" ? "relay" : "p2p",
+      room: (this.$("room").value || "").trim() || CFG.p2p.defaultRoom,
     };
   },
+
+  /* port 8765 = P2P signalling, 8766 = relay game server */
+  defaultServer(mode) {
+    const host = (location.protocol === "http:" || location.protocol === "https:")
+      ? location.hostname : "localhost";
+    return "ws://" + host + ":" + (mode === "relay" ? 8766 : 8765);
+  },
+
   rememberName() {
     try {
       this.$("name").value = localStorage.getItem("pa_name") || "";
-      const saved = localStorage.getItem("pa_server");
-      if (saved) {
-        this.$("server").value = saved;
-      } else if (location.protocol === "http:" || location.protocol === "https:") {
-        // default to the host the page was served from (works for LAN play)
-        this.$("server").value = "ws://" + location.hostname + ":8765";
-      }
+      this.$("room").value = localStorage.getItem("pa_room") || CFG.p2p.defaultRoom;
+      const mode = localStorage.getItem("pa_mode");
+      if (mode === "relay" || mode === "p2p") this.$("mode").value = mode;
+      const server = localStorage.getItem("pa_server_" + this.$("mode").value);
+      this.$("server").value = server || this.defaultServer(this.$("mode").value);
     } catch (e) { /* ignore */ }
   },
+
   saveName(name) {
     try {
       localStorage.setItem("pa_name", name);
-      localStorage.setItem("pa_server", this.$("server").value.trim());
+      localStorage.setItem("pa_room", this.$("room").value.trim());
+      localStorage.setItem("pa_mode", this.$("mode").value);
+      localStorage.setItem("pa_server_" + this.$("mode").value, this.$("server").value.trim());
     } catch (e) { /* ignore */ }
+  },
+
+  /* keep the address field in step with the chosen transport */
+  bindMode() {
+    const el = this.$("mode");
+    if (!el) return;
+    el.addEventListener("change", () => {
+      const mode = el.value;
+      let saved = null;
+      try { saved = localStorage.getItem("pa_server_" + mode); } catch (e) { /* ignore */ }
+      this.$("server").value = saved || this.defaultServer(mode);
+    });
   },
   showMenu() { this.$("menu").classList.remove("hidden"); },
   hideMenu() { this.$("menu").classList.add("hidden"); },

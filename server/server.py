@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("fps")
 
 HOST = "0.0.0.0"
-PORT = 8765
+PORT = 8766            # 8765 is the P2P signalling server, 8766 is the relay
 
 TICK = 0.05            # snapshot broadcast interval (s) -> 20 Hz
 RESPAWN_TIME = 3.0     # seconds a dead player waits before respawning

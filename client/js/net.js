@@ -94,11 +94,11 @@ class FPSNet {
 
   _reportOffline() {
     if (this.everConnected) {
-      this.emit("status", { msg: "Connection lost — reconnecting…", kind: "" });
+      this.emit("status", { msg: "Connection lost — reconnecting…", kind: "", offline: true });
     } else {
       this.emit("status", {
         msg: "Can't reach " + this.url + " — start the server with:  python server.py",
-        kind: "err",
+        kind: "err", offline: true,
       });
     }
   }

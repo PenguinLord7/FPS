@@ -53,12 +53,13 @@ body {
 .sub { color: #8b96a8; margin: 4px 0 22px; font-size: 13px; }
 
 .panel label { display: block; font-size: 11px; letter-spacing: 2px; color: #93a0b4; margin: 14px 0 6px; text-transform: uppercase; }
-.panel input {
+.panel input, .panel select {
   width: 100%; padding: 12px 14px; font-size: 15px; color: #fff;
   background: #0e141f; border: 1px solid var(--line); border-radius: 8px;
   outline: none; transition: border .15s;
 }
-.panel input:focus { border-color: var(--accent); }
+.panel input:focus, .panel select:focus { border-color: var(--accent); }
+.panel select { appearance: none; cursor: pointer; }
 
 #play {
   width: 100%; margin-top: 22px; padding: 14px; font-size: 16px; font-weight: 800;

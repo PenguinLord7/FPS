@@ -2,58 +2,89 @@
 
 A simple multiplayer first-person shooter:
 - **JavaScript (Three.js)** — 3D rendering, first-person movement, shooting FX, all client-side.
-- **Python (`websockets`)** — server tracks players, validates shots, applies damage, handles kills and respawns.
+- **Peer-to-peer by default** — players exchange game traffic directly over WebRTC data
+  channels; the Python server only brokers the connection.
+- **Python (`websockets`)** — acts as the P2P *signalling* server, and can still run the
+  original server-hosted **relay** mode as a fallback.
 
 ```
 FPS/
 ├── server/
-│   ├── server.py          # Python websocket game server
+│   ├── signalling.py      # P2P: rooms + WebRTC offer/answer/ICE relay (no game data)
+│   ├── server.py          # optional relay mode: authoritative game server
 │   └── requirements.txt
 ├── client/
 │   ├── index.html         # menu + HUD + loads the game scripts
+│   ├── serve.py           # static server with caching disabled
 │   ├── css/style.css
 │   └── js/
 │       ├── config.js      # settings + static level data
 │       ├── audio.js       # WebAudio synth SFX (no asset files)
 │       ├── ui.js          # HUD / menu / feed / scoreboard helpers
-│       ├── net.js         # websocket wrapper w/ reconnect
+│       ├── net.js         # relay transport (websocket w/ reconnect)
+│       ├── rtc.js         # P2P transport (WebRTC mesh)
 │       └── game.js        # Three.js engine, physics, players, shooting
 └── tests/
-    └── smoke_test.py      # scripted 2-client server check
+    └── smoke_test.py      # scripted 2-client check for the relay server
 ```
 
 ## 1. Start everything
 
-The easiest way — one command starts the Python server **and** the web server:
+One command starts the signalling server, the optional relay server and the web server:
 
 ```bash
 ./run.sh
 ```
 
-Then open **http://localhost:8000** in two browser tabs, pick a nickname in each and
-hit **DEPLOY**.
+```
+  signalling  : ws://localhost:8765   (P2P mode)
+  relay server: ws://localhost:8766   (relay mode)
+  play here   : http://localhost:8000
+```
+
+Then open **http://localhost:8000**, pick a nickname, and hit **DEPLOY**. Open a second
+browser tab (or a browser on another machine) to play against yourself.
 
 <details>
-<summary>Or start the two pieces manually</summary>
+<summary>Or start the pieces manually</summary>
 
 ```bash
-# terminal 1 — game server (listens on ws://0.0.0.0:8765)
 cd server
 pip install -r requirements.txt
-python server.py
+python signalling.py          # P2P signalling on ws://0.0.0.0:8765
+python server.py              # optional relay mode on ws://0.0.0.0:8766
 
-# terminal 2 — serve the client on http://localhost:8000
-cd client
-python serve.py            # caching disabled, so edits always take effect
+# serve the client on http://localhost:8000
+cd ../client
+python serve.py               # caching disabled, so edits always take effect
 ```
 </details>
 
-You can also just open `client/index.html` directly (WebSockets work from `file://`),
-in which case the client defaults to `ws://localhost:8765`.
+You can also just open `client/index.html` directly (WebSockets work from `file://`).
 
-If you host the server on another machine, put its address in the menu's *Server
-address* field (e.g. `ws://192.168.1.20:8765`) — it's remembered for next time. When the
-page is served over HTTP the field auto-fills with the same host on port 8765.
+### Playing with friends
+
+1. Everyone sets the **same Room** name.
+2. P2P mode needs a reachable signalling address. When the page is served over HTTP the
+   field auto-fills with the page's own host on port 8765, so a friend on your LAN just
+   visits `http://<your-ip>:8000` and hits DEPLOY — nothing else to configure.
+3. Across the internet you also need the signalling port reachable, and WebRTC must be
+   able to punch through NAT. A public STUN server is configured by default, which
+   covers most home networks; strict/symmetric NATs would need a TURN server added to
+   `CFG.p2p.iceServers` in `client/js/config.js`.
+
+### P2P vs Relay
+
+The menu's **Mode** selector picks the transport:
+
+| | **P2P** (default) | **Relay** |
+|---|---|---|
+| Game traffic | direct between browsers (WebRTC) | through the Python server |
+| Server role | signalling only | authoritative |
+| Who owns HP/kills | each player owns their own health | the server |
+| Best for | LAN / small groups, no host burden | strict NATs, anti-cheat, always works |
+
+Both modes use the identical client protocol, so gameplay is the same either way.
 
 ## Controls
 
@@ -66,11 +97,35 @@ page is served over HTTP the field auto-fills with the same host on port 8765.
 | `LMB`     | fire (3 hits to kill)       |
 | `Tab`     | scoreboard                  |
 | `Esc`     | release the mouse / pause   |
+| `V`       | toggle mouse capture (for browsers that block pointer lock) |
 
 Death screen shows a 3-second respawn countdown, then you drop back in at a random
 spawn point.
 
 ## How it works
+
+### P2P mode (default)
+
+The Python server only runs the signalling handshake:
+
+**Client → signalling server**
+- `join` — nickname + room name
+- `signal` — WebRTC offer / answer / ICE candidate, addressed to one peer
+
+**Signalling server → clients**
+- `welcome` — your id, plus the peers already in the room
+- `peer-join` / `peer-leave` — who is in the room
+- `signal` — the relayed offer/answer/ICE
+
+Once the `RTCDataChannel` is open, the game is fully peer-to-peer:
+- `state` — your position/health/kills, broadcast ~20×/s straight to the other players
+- `shoot` — origin/direction + who you hit
+- `hit` / `kill` / `respawn` — sent by the **victim**, who owns its own health
+
+A claimed hit is still sanity-checked by the victim (the shot must actually pass near
+it), and the shooter's own raycast decides what it hit locally.
+
+### Relay mode
 
 **Client → server**
 - `join` — handshake with nickname

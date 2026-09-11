@@ -13,6 +13,19 @@ window.CFG = {
   gravity: 22,
   respawnTime: 3.0,
 
+  // spawn points (used by P2P mode, where each client owns its own respawn)
+  spawns: [
+    [-40, -40], [40, -40], [-40, 40], [40, 40],
+    [-24, 10], [22, -14], [6, 30], [30, 24],
+  ],
+
+  // peer-to-peer transport (WebRTC). STUN is only needed across the internet;
+  // on a LAN / same machine the direct host candidates are used.
+  p2p: {
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    defaultRoom: "arena",
+  },
+
   // mouse
   sensX: 0.0021,
   sensY: 0.0021,

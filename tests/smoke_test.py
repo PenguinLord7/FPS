@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Smoke test for the FPS server.
+Smoke test for the FPS relay server.
 
-Assumes the server is already running (python server.py) on 127.0.0.1:8765.
+Assumes the relay server is already running (python server.py) on 127.0.0.1:8766.
 Connects two fake clients, moves one, shoots the other until it dies, and
 verifies the kill/respawn events arrive.
 """
@@ -13,7 +13,7 @@ import time
 
 import websockets
 
-SERVER = "ws://127.0.0.1:8765"
+SERVER = "ws://127.0.0.1:8766"
 
 
 async def collect(ws, seen, secs):
