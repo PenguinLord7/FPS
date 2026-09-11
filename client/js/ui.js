@@ -14,13 +14,35 @@ const UI = {
   rememberName() {
     try {
       this.$("name").value = localStorage.getItem("pa_name") || "";
+      const saved = localStorage.getItem("pa_server");
+      if (saved) {
+        this.$("server").value = saved;
+      } else if (location.protocol === "http:" || location.protocol === "https:") {
+        // default to the host the page was served from (works for LAN play)
+        this.$("server").value = "ws://" + location.hostname + ":8765";
+      }
     } catch (e) { /* ignore */ }
   },
   saveName(name) {
-    try { localStorage.setItem("pa_name", name); } catch (e) { /* ignore */ }
+    try {
+      localStorage.setItem("pa_name", name);
+      localStorage.setItem("pa_server", this.$("server").value.trim());
+    } catch (e) { /* ignore */ }
   },
   showMenu() { this.$("menu").classList.remove("hidden"); },
   hideMenu() { this.$("menu").classList.add("hidden"); },
+  setNet(status) {
+    const el = this.$("netstatus");
+    if (!el) return;
+    el.className = status;
+    el.textContent = status === "online" ? "● ONLINE"
+      : status === "connecting" ? "● CONNECTING" : "● OFFLINE";
+  },
+  setAim(mode) {
+    const el = this.$("aimstatus");
+    if (!el) return;
+    el.classList.toggle("hidden", mode !== "steer");
+  },
   setMenuStatus(msg, cls) {
     const el = this.$("mstatus");
     el.textContent = msg || "";

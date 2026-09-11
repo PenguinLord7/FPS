@@ -29,15 +29,29 @@ let colliders = [];        // axis-aligned footprints for player collision
 let tracers = [];          // active tracer beams
 let gunGroup, gunTip, muzzleSprite, muzzleLight, muzzleTex;
 let clock = new THREE.Clock();
+let unloadBound = false;
+
+const GUN_BASE = { x: 0.26, y: -0.30, z: -0.30 };  // viewmodel rest position
 
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _want = new THREE.Vector3();
-const _dir = new THREE.Vector3();
-const _tmp = new THREE.Vector3();
-const _tmp2 = new THREE.Vector3();
+const _shootDir = new THREE.Vector3();
+const _hitPoint = new THREE.Vector3();
+const _muzzle = new THREE.Vector3();
+const _traceDir = new THREE.Vector3();
 
 const raycaster = new THREE.Raycaster();
+
+/* shared material palette (guns + player hands) */
+const MATS = {};
+function initMaterials() {
+  MATS.body = new THREE.MeshStandardMaterial({ color: 0xd79a35, roughness: 0.72, metalness: 0.15, flatShading: true });
+  MATS.bodyDark = new THREE.MeshStandardMaterial({ color: 0xb87f28, roughness: 0.78, metalness: 0.12, flatShading: true });
+  MATS.metal = new THREE.MeshStandardMaterial({ color: 0x39434f, roughness: 0.5, metalness: 0.55, flatShading: true });
+  MATS.metalDark = new THREE.MeshStandardMaterial({ color: 0x2b333c, roughness: 0.6, metalness: 0.5, flatShading: true });
+  MATS.glove = new THREE.MeshStandardMaterial({ color: 0x2f3742, roughness: 0.85, flatShading: true });
+}
 
 /* ---------------- local player state ---------------- */
 const state = {
@@ -60,11 +74,16 @@ const state = {
   onGround: true,
   keys: {},
   locked: false,
+  steerMode: false,        // fallback aiming when pointer lock isn't available
+  mouse: { x: 0, y: 0 },   // cursor position, used by steering
   fireHeld: false,
   lastShot: 0,
+  shotsFired: 0,
   deathAt: 0,
   stateTimer: 0,
   uiTimer: 0,
+  offline: false,
+  offlineNotified: false,
 };
 
 /* remote players keyed by server id */
@@ -104,6 +123,7 @@ function initEngine() {
   scene.add(sun.target);
 
   buildWorld();
+  initMaterials();
   buildGun();
   bindInput();
   wireMenu();
@@ -166,32 +186,89 @@ function buildWorld() {
   }
 }
 
-/* ---------------- first-person gun (viewmodel) ---------------- */
+/* ---------------- low-poly rifle --------------------------------------
+ * Two-tone, faceted rifle based on the reference art:
+ *   mustard-yellow upper/lower receiver, handguard, stock, pistol grip
+ *   dark slate barrel, muzzle brake, rail, sights, magazine, buttpad
+ * Models point down -Z.  detail: "high" (viewmodel) | "low" (remote players)
+ * Returns { group, muzzle } where muzzle is the tracer/flash anchor.
+ * ------------------------------------------------------------------- */
+function buildRifle(detail) {
+  const g = new THREE.Group();
+  const high = detail !== "low";
+
+  const box = (w, h, d, x, y, z, mat, rx) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    if (rx) m.rotation.x = rx;
+    m.castShadow = true;
+    g.add(m);
+    return m;
+  };
+
+  // receiver body (yellow)
+  box(0.085, 0.075, 0.34, 0, 0.025, -0.10, MATS.body);       // upper receiver
+  box(0.085, 0.085, 0.30, 0, -0.065, -0.08, MATS.bodyDark);  // lower receiver
+
+  // handguard with side slots (yellow)
+  box(0.078, 0.090, 0.32, 0, 0.005, -0.44, MATS.body);
+  if (high) {
+    box(0.086, 0.030, 0.05, 0, 0.005, -0.34, MATS.bodyDark);
+    box(0.086, 0.030, 0.05, 0, 0.005, -0.53, MATS.bodyDark);
+  }
+
+  // top picatinny rail + teeth (dark)
+  box(0.050, 0.022, 0.60, 0, 0.082, -0.30, MATS.metalDark);
+  if (high) {
+    for (let i = 0; i < 8; i++)
+      box(0.052, 0.014, 0.018, 0, 0.100, -0.02 - i * 0.072, MATS.metalDark);
+  }
+
+  // barrel + muzzle brake (dark)
+  box(0.030, 0.030, 0.28, 0, 0.010, -0.70, MATS.metal);
+  box(0.046, 0.046, 0.075, 0, 0.010, -0.875, MATS.metalDark);
+
+  // iron sights (dark)
+  box(0.020, 0.060, 0.020, 0, 0.100, -0.585, MATS.metalDark); // front post
+  box(0.034, 0.042, 0.040, 0, 0.095, -0.055, MATS.metalDark); // rear
+
+  // curved box magazine, trigger guard, angled pistol grip
+  box(0.056, 0.165, 0.090, 0, -0.195, -0.155, MATS.metalDark, 0.30);
+  box(0.016, 0.012, 0.075, 0, -0.125, -0.005, MATS.metalDark);
+  box(0.055, 0.135, 0.075, 0, -0.165, 0.045, MATS.body, -0.42);
+
+  // buffer tube + collapsible stock + buttpad
+  box(0.042, 0.042, 0.13, 0, -0.010, 0.175, MATS.metalDark);
+  box(0.062, 0.095, 0.20, 0, -0.020, 0.315, MATS.body);
+  box(0.072, 0.150, 0.038, 0, -0.030, 0.432, MATS.metalDark);
+
+  const muzzle = new THREE.Object3D();
+  muzzle.position.set(0, 0.010, -0.96);
+  g.add(muzzle);
+  return { group: g, muzzle };
+}
+
+/* ---------------- first-person viewmodel ---------------- */
 function buildGun() {
   gunGroup = new THREE.Group();
-  const dark = new THREE.MeshStandardMaterial({ color: 0x24282e, roughness: 0.45, metalness: 0.55 });
-  const dark2 = new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.6, metalness: 0.4 });
-  const accent = new THREE.MeshStandardMaterial({ color: 0x40c4ff, roughness: 0.3, metalness: 0.4, emissive: 0x113a4d });
 
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.14, 0.95), dark);
-  body.position.set(0.28, -0.22, -0.5);
-  const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.1, 0.42), dark2);
-  shroud.position.set(0.28, -0.15, -0.95);
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.08), dark2);
-  grip.position.set(0.28, -0.36, -0.3);
-  grip.rotation.x = 0.3;
-  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.3), accent);
-  barrel.position.set(0.28, -0.18, -1.18);
-  const top = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.04, 0.5), accent);
-  top.position.set(0.28, -0.11, -0.7);
-  gunGroup.add(body, shroud, grip, barrel, top);
+  const rifle = buildRifle("high");
+  rifle.group.scale.setScalar(0.95);
+  gunGroup.add(rifle.group);
+  gunTip = rifle.muzzle;
 
-  // where tracers / muzzle flash originate
-  gunTip = new THREE.Object3D();
-  gunTip.position.set(0.28, -0.18, -1.28);
-  gunGroup.add(gunTip);
+  // gloved cube hands gripping the rifle
+  const frontHand = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.115, 0.14), MATS.glove);
+  frontHand.position.set(0, -0.075, -0.46);
+  const backHand = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.125, 0.15), MATS.glove);
+  backHand.position.set(0, -0.155, -0.02);
+  gunGroup.add(frontHand, backHand);
 
-  // muzzle flash sprite
+  // placed right of centre and angled inward so the barrel converges on the crosshair
+  gunGroup.position.set(GUN_BASE.x, GUN_BASE.y, GUN_BASE.z);
+  gunGroup.rotation.y = 0.10;
+
+  // muzzle flash sprite + light, parented to the muzzle so recoil carries them
   const mc = document.createElement("canvas");
   mc.width = mc.height = 64;
   const mx = mc.getContext("2d");
@@ -201,16 +278,16 @@ function buildGun() {
   grad.addColorStop(1, "rgba(255,150,40,0)");
   mx.fillStyle = grad; mx.fillRect(0, 0, 64, 64);
   muzzleTex = new THREE.CanvasTexture(mc);
+
   muzzleSprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: muzzleTex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
+    map: muzzleTex, transparent: true, opacity: 0, depthWrite: false,
+    blending: THREE.AdditiveBlending,
   }));
-  muzzleSprite.position.copy(gunTip.position);
-  muzzleSprite.scale.set(0.6, 0.6, 1);
-  gunGroup.add(muzzleSprite);
+  muzzleSprite.scale.set(0.5, 0.5, 1);
+  gunTip.add(muzzleSprite);
 
   muzzleLight = new THREE.PointLight(0xffb25c, 0, 10, 2);
-  muzzleLight.position.copy(gunTip.position);
-  gunGroup.add(muzzleLight);
+  gunTip.add(muzzleLight);
 
   camera.add(gunGroup);
 }
@@ -246,35 +323,113 @@ function beginSession(name, server) {
   UI.setMenuStatus("", "");
   state.inGame = true;
   state.name = name;
+  state.stateTimer = 0;
+  state.uiTimer = 0;
+  state.fireHeld = false;
+  state.keys = {};
 
   if (net) { try { net.close(); } catch (e) { /* ignore */ } net = null; }
 
   net = new FPSNet(server, name);
   wireNet(net);
   net.connect();
-  UI.toast("Connecting…", "");
+  UI.setNet("connecting");
+  UI.toast("Connecting to " + server + " …", "", 2200);
   lockPointer();
 }
 
 function lockPointer() {
   if (!renderer) return;
+  if (state.steerMode && !state.locked) return; // steering is explicitly enabled
   const el = renderer.domElement;
-  if (document.pointerLockElement !== el) {
-    try { el.requestPointerLock && el.requestPointerLock(); } catch (e) { /* ignore */ }
-  }
+  if (document.pointerLockElement === el) return;
+  if (!el.requestPointerLock) { enableSteering(); return; }
+  let res;
+  try { res = el.requestPointerLock(); } catch (e) { enableSteering(); return; }
+  // Chrome returns a promise — a rejection means we can't capture the mouse
+  if (res && typeof res.catch === "function") res.catch(() => enableSteering());
+
+  // some embedded browsers fail silently: if the lock never arrives, fall back
+  clearTimeout(lockPointer._t);
+  lockPointer._t = setTimeout(() => {
+    if (!state.locked && state.inGame) enableSteering();
+  }, 800);
+}
+
+/* Pointer lock is blocked in iframes / embedded browsers. Rather than leaving
+   the player unable to aim or shoot, switch to cursor-steering: the view turns
+   while the cursor is away from the centre of the screen. */
+function enableSteering() {
+  if (state.steerMode) return;
+  state.steerMode = true;
+  UI.setAim("steer");
+  UI.toast("Mouse capture unavailable — aim by moving the cursor away from the centre. Press V to retry.", "", 7000);
+}
+
+function steerAim(dt) {
+  if (state.locked || !state.steerMode) return;
+  const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+  const nx = (state.mouse.x - cx) / Math.max(1, cx);
+  const ny = (state.mouse.y - cy) / Math.max(1, cy);
+  const dz = CFG.steer.dead;
+  const rx = Math.sign(nx) * Math.max(0, Math.abs(nx) - dz) / (1 - dz);
+  const ry = Math.sign(ny) * Math.max(0, Math.abs(ny) - dz) / (1 - dz);
+  state.yaw -= rx * CFG.steer.yawRate * dt;
+  state.pitch -= ry * CFG.steer.pitchRate * dt;
+}
+
+/* Tear the session down and show the menu again (fatal connect errors, kick, …) */
+function returnToMenu() {
+  if (net) { try { net.close(); } catch (e) { /* ignore */ } net = null; }
+  clearRemotes();
+  clearTracers();
+  state.inGame = false;
+  state.connected = false;
+  state.joined = false;
+  state.alive = true;
+  state.deathAt = 0;
+  state.fireHeld = false;
+  state.keys = {};
+  UI.hideDeath();
+  UI.setPause(false);
+  if (document.exitPointerLock) { try { document.exitPointerLock(); } catch (e) { /* ignore */ } }
+  UI.showMenu();
 }
 
 /* ---------------- networking ---------------- */
 function wireNet(n) {
   n.on("open", () => {
     state.connected = true;
+    state.offline = false;
+    state.offlineNotified = false;
+    UI.setNet("connecting");
     UI.toast("Connected — awaiting spawn…", "good", 1500);
   });
 
-  n.on("status", (s) => { if (state.inGame) UI.toast(s.msg, s.kind || "", 2200); });
+  n.on("close", () => {
+    state.connected = false;
+    state.joined = false;
+    state.offline = true;
+    UI.setNet("offline");
+  });
+
+  n.on("status", (s) => {
+    if (!state.inGame) return;
+    UI.setNet("offline");
+    // only surface the failure once per outage instead of on every retry
+    if (!state.offlineNotified) {
+      state.offlineNotified = true;
+      UI.toast(s.msg, s.kind || "", 6000);
+    }
+    if (s.fatal) returnToMenu();
+  });
 
   n.on("welcome", (m) => {
+    // assign ALL session state first — UI calls must never be able to abort it
     state.joined = true;
+    state.connected = true;
+    state.offline = false;
+    state.offlineNotified = false;
     state.selfId = m.self.id;
     state.name = m.self.name;
     state.color = m.self.color;
@@ -282,17 +437,21 @@ function wireNet(n) {
     state.kills = 0;
     state.alive = true;
     state.deathAt = 0;
-    UI.hideDeath();
     // fresh session: clear remotes (new player id may differ after reconnect)
     clearRemotes();
     m.players.forEach(syncFromSnap);
+
+    UI.setNet("online");
+    UI.hideDeath();
+    UI.setHP(state.maxHp, state.maxHp);
     SFX.spawn();
     UI.toast(`Welcome, ${m.self.name}!`, "good", 1800);
   });
 
   n.on("full", () => {
-    UI.toast("Server is full — try again soon.", "err");
-    UI.setMenuStatus("Server full.", "err");
+    UI.setMenuStatus("Server is full — try again soon.", "err");
+    UI.toast("Server is full — try again soon.", "err", 3500);
+    returnToMenu();
   });
   n.on("error", () => {});
 
@@ -354,7 +513,10 @@ function wireNet(n) {
     }
   });
 
-  window.addEventListener("beforeunload", () => { if (net) net.close(); });
+  if (!unloadBound) {
+    unloadBound = true;
+    window.addEventListener("beforeunload", () => { if (net) net.close(); });
+  }
 }
 
 function colorOf(id) {
@@ -428,19 +590,35 @@ function makeTag() {
 function createRemote(info) {
   const g = new THREE.Group();
   const col = new THREE.Color(info.color || 0xff5252);
-  const matBody = new THREE.MeshStandardMaterial({ color: col, roughness: 0.7 });
-  const matHead = new THREE.MeshStandardMaterial({ color: col.clone().lerp(new THREE.Color(0xffffff), 0.35), roughness: 0.6 });
-  const matGun = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: 0.4, metalness: 0.6 });
+  const bodyMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.75, flatShading: true });
 
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.5, 1.3, 10), matBody);
-  body.position.y = 1.15; body.castShadow = true;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 10), matHead);
-  head.position.y = 2.0; head.castShadow = true;
-  const gun = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 1.0), matGun);
-  gun.position.set(0, 1.55, -0.6); gun.castShadow = true;
-  g.add(body, head, gun);
+  // --- capsule body (cylinder + rounded caps; r128 has no CapsuleGeometry) ---
+  const radius = 0.4, cylH = 1.0;
+  const capsule = new THREE.Group();
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, cylH, 10, 1), bodyMat);
+  cyl.position.y = radius + cylH / 2;
+  const topCap = new THREE.Mesh(new THREE.SphereGeometry(radius, 10, 6), bodyMat);
+  topCap.position.y = radius + cylH;
+  const botCap = new THREE.Mesh(new THREE.SphereGeometry(radius, 10, 6), bodyMat);
+  botCap.position.y = radius;
+  [cyl, topCap, botCap].forEach((m) => { m.castShadow = true; capsule.add(m); });
+  g.add(capsule);
 
-  // two invisible hit proxies (torso + head) used for the hitscan raycast
+  // --- floating cube hands out front, holding the rifle ---
+  const handGeo = new THREE.BoxGeometry(0.13, 0.13, 0.15);
+  const frontHand = new THREE.Mesh(handGeo, MATS.glove);
+  frontHand.position.set(0, 0.99, -0.47);
+  const backHand = new THREE.Mesh(handGeo, MATS.glove);
+  backHand.position.set(0, 0.89, -0.15);
+  frontHand.castShadow = backHand.castShadow = true;
+  g.add(frontHand, backHand);
+
+  const rifle = buildRifle("low");
+  rifle.group.scale.setScalar(0.62);
+  rifle.group.position.set(0, 0.99, -0.32);
+  g.add(rifle.group);
+
+  // --- invisible hit proxies covering the capsule ---
   const hitSpheres = [];
   const mk = (r, y) => {
     const p = new THREE.Mesh(
@@ -455,22 +633,23 @@ function createRemote(info) {
     hitSpheres.push(p);
     return p;
   };
-  mk(0.62, 1.05);
-  mk(0.34, 1.85);
+  mk(0.46, 0.45);   // legs / lower body
+  mk(0.46, 0.95);   // torso
+  mk(0.43, 1.42);   // shoulders
+  mk(0.34, 1.74);   // head
 
   const tag = makeTag();
-  tag.spr.position.y = 2.85;
+  tag.spr.position.y = 2.35;
   g.add(tag.spr);
 
   scene.add(g);
 
   const rec = {
-    id: info.id, group: g, tag,
-    hitSpheres,
+    id: info.id, group: g, tag, bodyMat, hitSpheres,
     name: info.name || "?",
     color: info.color || "#ff5252",
-    pos: new THREE.Vector3(info.p ? info.p[0] : 0, info.p ? info.p[1] : 0, info.p ? info.p[2] : 0),
-    tpos: new THREE.Vector3().copy(recPos(info)),
+    pos: recPos(info),
+    tpos: recPos(info),
     ry: info.ry || 0,
     try_: info.ry || 0,
     hp: info.hp != null ? info.hp : 100,
@@ -478,6 +657,7 @@ function createRemote(info) {
     kills: info.kills || 0,
     lastHp: -1,
     lastAlive: null,
+    lastName: null,
   };
   g.position.copy(rec.pos);
   g.rotation.y = rec.ry;
@@ -485,7 +665,8 @@ function createRemote(info) {
   return rec;
 }
 function recPos(info) {
-  return new THREE.Vector3(info.p ? info.p[0] : 0, info.p ? info.p[1] : 0, info.p ? info.p[2] : 0);
+  const p = info.p;
+  return new THREE.Vector3(p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0);
 }
 
 function ensureRemote(info) {
@@ -510,19 +691,18 @@ function removeRemote(id) {
 
 function disposeRemote(r) {
   scene.remove(r.group);
-  r.group.traverse((o) => {
-    if (o.geometry) o.geometry.dispose();
-    if (o.material) {
-      if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
-      else o.material.dispose();
-    }
-  });
-  if (r.tag && r.tag.tex) r.tag.tex.dispose();
+  // geometry is per-player, but materials are shared (MATS) — never dispose those
+  r.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+  if (r.bodyMat) r.bodyMat.dispose();
+  if (r.tag) {
+    if (r.tag.spr && r.tag.spr.material) r.tag.spr.material.dispose();
+    if (r.tag.tex) r.tag.tex.dispose();
+  }
 }
 
 function updateRemote(r, dt) {
-  const k = 1 - Math.exp(-dt * 10);
-  if (r.pos.distanceToSquared(r.tpos) > 2500) r.pos.copy(r.tpos); // teleport
+  const k = 1 - Math.exp(-dt * 14);
+  if (r.pos.distanceToSquared(r.tpos) > 2500) r.pos.copy(r.tpos); // teleport (respawn)
   r.pos.lerp(r.tpos, k);
   r.ry = angleLerp(r.ry, r.try_, k);
   r.group.position.copy(r.pos);
@@ -576,18 +756,23 @@ function moveAxisZ(p, dz) {
 }
 
 function physics(dt) {
-  if (!state.inGame || !state.alive) { state.vel.set(0, 0, 0); state.vy = 0; return; }
+  if (!state.inGame || !state.alive) {
+    state.vel.set(0, 0, 0);
+    state.vy = 0;
+    _want.set(0, 0, 0);
+    return;
+  }
   const k = state.keys;
 
-  // movement direction projected onto the ground, from the camera view
-  camera.getWorldDirection(_fwd);
-  _fwd.y = 0;
-  if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1);
-  _fwd.normalize();
+  // Ground-plane basis derived straight from yaw. We deliberately don't read the
+  // camera matrix here: the camera is positioned *after* physics each frame, so
+  // reading it would make every shot/tracer a frame stale (the "bullet dragged
+  // behind / off to the side while sprinting" bug).
+  _fwd.set(-Math.sin(state.yaw), 0, -Math.cos(state.yaw));
   _right.crossVectors(_fwd, UP).normalize();
 
-  let mx = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
-  let mz = (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0);
+  const mx = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
+  const mz = (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0);
   _want.set(0, 0, 0).addScaledVector(_fwd, mz).addScaledVector(_right, mx);
   if (_want.lengthSq() > 0) {
     _want.normalize();
@@ -625,11 +810,14 @@ function applyCamera(dt) {
   camera.rotation.set(state.pitch + state.recoil, state.yaw, 0);
   camera.updateMatrixWorld(true);
 
-  // subtle gun idle sway while moving + visible recoil kick
-  const moving = state.alive && (_want.x || _want.z) && state.onGround;
-  const t = clock.elapsedTime;
-  const bob = moving ? Math.sin(t * 9) * 0.012 : 0;
-  gunGroup.position.set(bob * 0.6, bob * 0.5, state.recoil * 0.35);
+  // gun sway while moving + visible recoil kick (offsets applied on top of rest pose)
+  const moving = state.alive && (_want.x !== 0 || _want.z !== 0) && state.onGround;
+  const bob = moving ? Math.sin(clock.elapsedTime * 9) * 0.012 : 0;
+  gunGroup.position.set(
+    GUN_BASE.x + bob * 0.6,
+    GUN_BASE.y + bob * 0.5,
+    GUN_BASE.z + state.recoil * 0.5
+  );
   gunGroup.rotation.x = -state.recoil * 0.6;
 }
 
@@ -642,33 +830,34 @@ function liveProxies() {
 
 function tryShoot() {
   const now = performance.now();
-  if (now - state.lastShot < CFG.weapon.cooldown * 1000) return;
-  if (!state.alive) return;
+  if (!state.alive || now - state.lastShot < CFG.weapon.cooldown * 1000) return;
   state.lastShot = now;
+  state.shotsFired++;
 
-  raycaster.setFromCamera(_tmp.set(0, 0, 0), camera);
+  // ray straight out of the (just-updated) camera through the crosshair
+  camera.getWorldDirection(_shootDir);
+  raycaster.set(camera.position, _shootDir);
+  raycaster.near = 0;
   raycaster.far = CFG.weapon.range;
 
-  const targets = blockMeshes.concat(liveProxies());
-  const hits = raycaster.intersectObjects(targets, false);
+  const hits = raycaster.intersectObjects(blockMeshes.concat(liveProxies()), false);
 
   let victimId = null;
-  let end = null;
   if (hits.length) {
     const h = hits[0];
     if (h.object.userData.isProxy) victimId = h.object.userData.id;
-    end = _tmp2.copy(h.point);
+    _hitPoint.copy(h.point);
   } else {
-    camera.getWorldDirection(_dir);
-    end = _tmp2.copy(camera.position).addScaledVector(_dir, CFG.weapon.range);
+    _hitPoint.copy(camera.position).addScaledVector(_shootDir, CFG.weapon.range);
   }
 
-  // FX: tracer from the muzzle tip to the impact point
-  const origin = camera.position;
-  gunTipWorld(_dir); // _dir reused as muzzle world pos
-  spawnTracer(_dir, end, CFG.weapon.tracerColor);
+  // tracer runs from the current muzzle to the impact point
+  gunTipWorld(_muzzle);
+  if (_muzzle.distanceToSquared(_hitPoint) > 0.09) {
+    spawnTracer(_muzzle, _hitPoint, CFG.weapon.tracerColor);
+  }
 
-  // muzzle flash
+  // muzzle flash + recoil kick
   muzzleSprite.material.opacity = 1;
   muzzleSprite.rotation.z = Math.random() * Math.PI;
   muzzleLight.intensity = 2.4;
@@ -678,56 +867,104 @@ function tryShoot() {
   net.send({
     type: "shoot",
     victim: victimId,
-    p: [origin.x, origin.y, origin.z],
-    d: (camera.getWorldDirection(_tmp).toArray()),
+    p: [camera.position.x, camera.position.y, camera.position.z],
+    d: [_shootDir.x, _shootDir.y, _shootDir.z],
+    ry: state.yaw,
   });
 
   if (victimId) { UI.hitmark(false); SFX.hitmark(); }
 }
 
-/* tracer beams */
+/* tracer bullets
+ * A short streak that travels from the muzzle to the impact point, then is
+ * removed. This matters: a full-length beam frozen in world space gets "left
+ * behind" when you sprint, so the bullet appears dragged backwards or off to
+ * one side. A moving streak always flies away from the gun. */
 function spawnTracer(from, to, color) {
-  const dir = _tmp.copy(to).sub(from);
-  const len = dir.length();
-  if (len < 0.5) return;
+  const dir = _traceDir.copy(to).sub(from);
+  const dist = dir.length();
+  if (dist < 0.4) return;
   dir.normalize();
+
+  // never let bullets accumulate, whatever else happens
+  while (tracers.length >= CFG.weapon.tracerMax) {
+    const old = tracers.shift();
+    scene.remove(old.mesh);
+    old.mesh.material.dispose();
+  }
+
+  const life = clampNum(dist / CFG.weapon.tracerSpeed,
+                        CFG.weapon.tracerLifeMin, CFG.weapon.tracerLifeMax);
+  const streak = clampNum(dist * CFG.weapon.tracerStreak, 1.0, 5.0);
+
   const mat = new THREE.MeshBasicMaterial({
     color: color, transparent: true, opacity: 1,
     blending: THREE.AdditiveBlending, depthWrite: false,
   });
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 1, 6, 1, true), mat);
-  mesh.position.copy(from).add(to).multiplyScalar(0.5);
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 1, 6, 1, true), mat);
   mesh.quaternion.setFromUnitVectors(UP, dir);
-  mesh.scale.y = len;
   mesh.renderOrder = 5;
   scene.add(mesh);
-  tracers.push({ mesh, life: CFG.weapon.tracerLife, max: CFG.weapon.tracerLife });
+
+  tracers.push({
+    mesh,
+    origin: from.clone(),
+    dir: dir.clone(),
+    dist,
+    streak,
+    speed: dist / life,
+    traveled: 0,
+  });
+}
+
+/* drop every live bullet (death, respawn, leaving the arena) */
+function clearTracers() {
+  for (const tr of tracers) {
+    scene.remove(tr.mesh);
+    tr.mesh.material.dispose();
+  }
+  tracers.length = 0;
 }
 
 function spawnRemoteTracer(m) {
-  const from = _tmp.set(m.p[0], m.p[1], m.p[2]);
-  const dir = _tmp2.set(m.d[0], m.d[1], m.d[2]).normalize();
-  // clip against world geometry
+  if (!Array.isArray(m.p) || !Array.isArray(m.d)) return;
+  const from = new THREE.Vector3(m.p[0], m.p[1], m.p[2]);
+  const dir = new THREE.Vector3(m.d[0], m.d[1], m.d[2]);
+  if (dir.lengthSq() < 1e-6) return;
+  dir.normalize();
+
   raycaster.set(from, dir);
+  raycaster.near = 0;
   raycaster.far = CFG.weapon.range;
   const hits = raycaster.intersectObjects(blockMeshes, false);
-  const to = hits.length ? _tmp.copy(hits[0].point) : from.clone().addScaledVector(dir, CFG.weapon.range);
-  const start = from.clone().addScaledVector(dir, 0.4);
+
+  const to = hits.length
+    ? hits[0].point.clone()
+    : from.clone().addScaledVector(dir, CFG.weapon.range);
+  const start = from.clone().addScaledVector(dir, 0.5);
   spawnTracer(start, to, 0xffca6e);
 }
 
 function updateFX(dt) {
-  // tracers
+  // bullets: advance each streak along its own path, then remove it on impact
   for (let i = tracers.length - 1; i >= 0; i--) {
     const tr = tracers[i];
-    tr.life -= dt;
-    if (tr.life <= 0) {
+    tr.traveled += tr.speed * dt;
+
+    if (tr.traveled >= tr.dist) {           // reached the impact point
       scene.remove(tr.mesh);
       tr.mesh.material.dispose();
       tracers.splice(i, 1);
-    } else {
-      tr.mesh.material.opacity = tr.life / tr.max;
+      continue;
     }
+
+    const head = tr.traveled;                       // leading edge
+    const tail = Math.max(0, head - tr.streak);     // trailing edge
+    const len = Math.max(0.001, head - tail);
+    tr.mesh.position.copy(tr.origin).addScaledVector(tr.dir, (head + tail) * 0.5);
+    tr.mesh.scale.set(1, len, 1);
+    // subtle fade over the last third so it vanishes cleanly
+    tr.mesh.material.opacity = clampNum((1 - tr.traveled / tr.dist) * 3, 0, 1);
   }
   // muzzle flash
   if (muzzleSprite.material.opacity > 0)
@@ -742,8 +979,20 @@ function bindInput() {
 
   document.addEventListener("pointerlockchange", () => {
     state.locked = document.pointerLockElement === canvas;
-    if (state.inGame && !state.locked) UI.setPause(true);
-    else UI.setPause(false);
+    if (state.locked) {
+      state.steerMode = false;   // capture works — use normal mouse look
+      UI.setAim("lock");
+      UI.setPause(false);
+    } else {
+      state.fireHeld = false;
+      UI.setPause(state.inGame && !state.steerMode);
+    }
+  });
+
+  document.addEventListener("pointerlockerror", enableSteering);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { state.keys = {}; state.fireHeld = false; }
   });
 
   canvas.addEventListener("click", () => {
@@ -751,23 +1000,30 @@ function bindInput() {
   });
 
   document.addEventListener("mousemove", (e) => {
-    if (!state.locked) return;
+    state.mouse.x = e.clientX;
+    state.mouse.y = e.clientY;
+    if (!state.locked) return;   // steering uses the cursor position instead
     state.yaw -= e.movementX * CFG.sensX;
     state.pitch -= e.movementY * CFG.sensY;
   });
 
   document.addEventListener("mousedown", (e) => {
-    if (e.button === 0 && state.locked && state.alive) {
+    if (e.button === 0 && state.alive && (state.locked || state.steerMode)) {
       state.fireHeld = true;
     }
   });
   document.addEventListener("mouseup", (e) => {
     if (e.button === 0) state.fireHeld = false;
   });
+  // safety nets for a missed mouseup (pointer lock always keeps the cursor
+  // captured, so these are belt-and-braces rather than the primary path)
+  document.addEventListener("mouseleave", () => { state.fireHeld = false; });
+  document.addEventListener("contextmenu", (e) => { e.preventDefault(); });
 
   document.addEventListener("keydown", (e) => {
     state.keys[e.code] = true;
     if (e.code === "Tab") { e.preventDefault(); UI.scoreboard(true); }
+    if (e.code === "KeyV") toggleAim();
   });
   document.addEventListener("keyup", (e) => {
     state.keys[e.code] = false;
@@ -776,6 +1032,20 @@ function bindInput() {
   window.addEventListener("blur", () => { state.keys = {}; state.fireHeld = false; });
 }
 
+/* V — retry mouse capture, or force cursor-steering when capture is blocked */
+function toggleAim() {
+  if (!state.inGame) return;
+  if (state.steerMode) {
+    state.steerMode = false;
+    UI.setAim("lock");
+    UI.toast("Retrying mouse capture…", "", 1600);
+    lockPointer();
+    if (!state.locked) setTimeout(() => { if (!state.locked) enableSteering(); }, 900);
+  } else {
+    document.exitPointerLock && document.exitPointerLock();
+    enableSteering();
+  }
+}
 function onResize() {
   if (!renderer) return;
   const w = window.innerWidth, h = window.innerHeight;
@@ -790,14 +1060,22 @@ function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
   if (state.inGame) {
-    applyCamera(dt);
+    // aiming: pointer-lock deltas, or cursor-steering when lock is unavailable
+    steerAim(dt);
+
+    // physics moves the player first, then the camera is placed from the new
+    // position — so shooting later in this same frame uses a fresh transform.
     physics(dt);
+    applyCamera(dt);
     updateRemotesAll(dt);
 
-    // continuous fire while holding LMB
-    if (state.fireHeld && state.locked && state.alive && state.joined) tryShoot();
+    // continuous fire while holding LMB. Deliberately NOT gated on the network
+    // state: movement and shooting stay responsive even if the server is down
+    // (shots just aren't transmitted until we're connected).
+    if (state.fireHeld && (state.locked || state.steerMode) && state.alive) tryShoot();
 
     sendState(dt);
+    updateHud(dt);
 
     // death countdown
     if (!state.alive && state.deathAt) {
@@ -812,6 +1090,9 @@ function tick() {
     connected: state.connected, joined: state.joined,
     self: state.selfId, players: remotes.size,
     hp: state.hp, alive: state.alive,
+    locked: state.locked, fireHeld: state.fireHeld,
+    shotsFired: state.shotsFired, tracers: tracers.length,
+    pos: [+state.pos.x.toFixed(2), +state.pos.y.toFixed(2), +state.pos.z.toFixed(2)],
   };
 
   renderer.render(scene, camera);
@@ -821,32 +1102,38 @@ function updateRemotesAll(dt) {
   remotes.forEach((r) => updateRemote(r, dt));
 }
 
+/* position updates (~20 Hz) */
 function sendState(dt) {
-  if (!state.connected || !state.joined) return;
+  if (!state.connected || !state.joined || !state.alive) return;
   state.stateTimer += dt;
   if (state.stateTimer < 0.05) return;
   state.stateTimer = 0;
-  if (!state.alive) return;
   net.send({
     type: "state",
     p: [state.pos.x, state.pos.y, state.pos.z],
     ry: state.yaw,
   });
+}
 
-  // throttle UI-only refresh
+/* HUD/scoreboard refresh — kept independent of the network timer so it keeps
+   running while dead or briefly disconnected */
+function updateHud(dt) {
   state.uiTimer += dt;
-  if (state.uiTimer >= 0.25) {
-    state.uiTimer = 0;
-    UI.setPlayerLabel(state.name, state.color, state.kills);
-    // scoreboard rows
-    const rows = [];
-    remotes.forEach((r) => {
-      rows.push({ name: r.name, color: r.color, hp: r.hp, kills: r.kills, alive: r.alive, self: false });
-    });
-    rows.push({ name: state.name + " (you)", color: state.color, hp: state.hp, kills: state.kills, alive: state.alive, self: true });
-    rows.sort((a, b) => b.kills - a.kills || b.hp - a.hp);
-    UI.renderScoreboard(rows);
-  }
+  if (state.uiTimer < 0.25) return;
+  state.uiTimer = 0;
+
+  UI.setPlayerLabel(state.name, state.color, state.kills);
+
+  const rows = [];
+  remotes.forEach((r) => {
+    rows.push({ name: r.name, color: r.color, hp: r.hp, kills: r.kills, alive: r.alive, self: false });
+  });
+  rows.push({
+    name: state.name + " (you)", color: state.color,
+    hp: state.hp, kills: state.kills, alive: state.alive, self: true,
+  });
+  rows.sort((a, b) => b.kills - a.kills || b.hp - a.hp);
+  UI.renderScoreboard(rows);
 }
 
 /* ---------------- death / respawn ---------------- */
@@ -855,6 +1142,8 @@ function localDeath(killerName) {
   state.alive = false;
   state.deathAt = performance.now();
   state.vy = 0;
+  state.fireHeld = false;
+  clearTracers();
   UI.setHP(0, state.maxHp);
   UI.setLowHp(false);
   UI.showDeath(killerName);
@@ -870,6 +1159,7 @@ function localRespawn(p) {
   state.vy = 0;
   state.onGround = true;
   state.deathAt = 0;
+  clearTracers();
   UI.hideDeath();
   UI.setHP(state.hp, state.maxHp);
   UI.setLowHp(false);

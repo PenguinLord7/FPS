@@ -82,6 +82,25 @@ body {
 /* ============ HUD ============ */
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
 
+#netstatus {
+  position: absolute; top: 12px; left: 14px;
+  font-size: 11px; font-weight: 700; letter-spacing: 2px;
+  padding: 5px 10px; border-radius: 6px;
+  background: rgba(8,11,18,.72); border: 1px solid var(--line);
+  color: #8b96a8;
+}
+#netstatus.online { color: var(--good); border-color: rgba(105,240,174,.45); }
+#netstatus.connecting { color: var(--warn); border-color: rgba(255,213,79,.45); }
+#netstatus.offline { color: #ff8a80; border-color: rgba(255,82,82,.5); }
+
+#aimstatus {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
+  padding: 5px 12px; border-radius: 6px;
+  background: rgba(8,11,18,.78); border: 1px solid rgba(64,196,255,.5);
+  color: var(--accent);
+}
+
 #crosshair {
   position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
   transform: translate(-50%, -50%);

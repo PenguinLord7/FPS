@@ -54,6 +54,13 @@ async def main():
         await a.send(json.dumps({"type": "state", "p": [2, 0, 0], "ry": 3.14}))
         await asyncio.sleep(0.2)
 
+        # a shot that claims a victim it isn't aimed at must be rejected
+        await a.send(json.dumps({"type": "shoot", "victim": bob_id,
+                                 "p": [0, 1.6, 40], "d": [0, 0, 1]}))
+        await asyncio.sleep(0.35)
+        bogus_hits = sum(1 for m in alice_msgs + bob_msgs if m["type"] == "hit")
+        print("bogus hits rejected:", bogus_hits == 0)
+
         # alice shoots bob until the kill event arrives
         shot = {"type": "shoot", "victim": bob_id, "p": [2, 1.6, 0], "d": [-1, 0, 0]}
         for _ in range(5):
@@ -76,7 +83,8 @@ async def main():
             results["respawns"] += 1
 
     print("summary:", results)
-    ok = results["kills"] >= 1 and results["hits"] >= 1 and results["snaps"] > 0
+    ok = (results["kills"] >= 1 and results["hits"] >= 1
+          and results["snaps"] > 0 and bogus_hits == 0)
     print("RESULT:", "PASS" if ok else "FAIL")
     sys.exit(0 if ok else 1)
 

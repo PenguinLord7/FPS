@@ -22,30 +22,38 @@ FPS/
     └── smoke_test.py      # scripted 2-client server check
 ```
 
-## 1. Start the server
+## 1. Start everything
+
+The easiest way — one command starts the Python server **and** the web server:
 
 ```bash
+./run.sh
+```
+
+Then open **http://localhost:8000** in two browser tabs, pick a nickname in each and
+hit **DEPLOY**.
+
+<details>
+<summary>Or start the two pieces manually</summary>
+
+```bash
+# terminal 1 — game server (listens on ws://0.0.0.0:8765)
 cd server
-python -m venv .venv && source .venv/bin/activate   # optional but recommended
 pip install -r requirements.txt
 python server.py
-```
 
-The server listens on `ws://0.0.0.0:8765`.
-
-## 2. Open the client
-
-Just open `client/index.html` in two browser tabs/windows (WebSocket connections work
-fine from `file://`), **or** serve the folder and open `http://localhost:8000`:
-
-```bash
+# terminal 2 — serve the client on http://localhost:8000
 cd client
-python -m http.server 8000
+python serve.py            # caching disabled, so edits always take effect
 ```
+</details>
 
-Each tab needs its own nickname, then hit **DEPLOY**. Both players should see each
-other on the arena. If you host the server on another machine, change the *Server
-address* field in the menu (e.g. `ws://192.168.1.20:8765`).
+You can also just open `client/index.html` directly (WebSockets work from `file://`),
+in which case the client defaults to `ws://localhost:8765`.
+
+If you host the server on another machine, put its address in the menu's *Server
+address* field (e.g. `ws://192.168.1.20:8765`) — it's remembered for next time. When the
+page is served over HTTP the field auto-fills with the same host on port 8765.
 
 ## Controls
 
@@ -76,9 +84,16 @@ spawn point.
 - `hit` / `kill` / `respawn` — damage, eliminations and auto-respawns
 
 The client does the fine-grained raycast (against the world + other players' hit
-spheres) so shooting feels instant; the server double-checks each shot (alive,
-cooldown, range) and owns HP / kills / respawns, so a cheated "victim" claim can't
-help you much.
+spheres) so shooting feels instant; the server re-checks every shot — shooter alive,
+fire-rate cooldown, and a ray-vs-victim test that rejects hits aimed nowhere near the
+target — and owns HP / kills / respawns.
+
+### Models
+
+The first-person weapon is a faceted low-poly rifle (mustard-yellow receiver,
+handguard, stock and grip with a dark slate barrel, rail, sights, magazine and
+buttpad). Other players are drawn as a capsule with two floating cube "hands" holding
+the same rifle, plus an overhead name/health tag.
 
 ## Tests
 

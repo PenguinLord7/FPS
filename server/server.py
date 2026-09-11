@@ -59,6 +59,40 @@ def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def vec3(value):
+    """Return a tuple of three finite floats from an untrusted payload, or None."""
+    if not (isinstance(value, (list, tuple)) and len(value) >= 3):
+        return None
+    try:
+        out = tuple(float(v) for v in value[:3])
+    except (TypeError, ValueError):
+        return None
+    if any(math.isnan(v) or math.isinf(v) for v in out):
+        return None
+    return out
+
+
+def ray_hits_point(origin, direction, point, radius: float) -> bool:
+    """Shortest distance between a ray and a point.
+
+    Used to sanity-check a client's claimed hit without needing the full level
+    on the server: accept only if the shot actually passes close to the victim.
+    """
+    ox, oy, oz = origin
+    dx, dy, dz = direction
+    ln = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if ln < 1e-6:
+        return False
+    dx, dy, dz = dx / ln, dy / ln, dz / ln
+
+    px, py, pz = point[0] - ox, point[1] - oy, point[2] - oz
+    t = px * dx + py * dy + pz * dz
+    if t < 0 or t > MAX_SHOT_RANGE:
+        return False
+    cx, cy, cz = px - t * dx, py - t * dy, pz - t * dz
+    return math.sqrt(cx * cx + cy * cy + cz * cz) <= radius
+
+
 class Player:
     """Server-side view of one connected client."""
 
@@ -94,17 +128,23 @@ class Player:
 #  Messaging helpers
 # --------------------------------------------------------------------------- #
 
-def push(pl: Player | None, obj: dict) -> None:
+def push(pl: "Player | None", obj: dict) -> None:
+    """Queue a message for one connection (serialised here, sent by its writer)."""
     if pl is not None:
         try:
-            pl.q.put_nowait(obj)
+            pl.q.put_nowait(json.dumps(obj))
         except Exception:
             pass
 
 
 def push_all(obj: dict) -> None:
+    """Serialise once, then fan the same payload out to every player."""
+    data = json.dumps(obj)
     for pl in list(players.values()):
-        push(pl, obj)
+        try:
+            pl.q.put_nowait(data)
+        except Exception:
+            pass
 
 
 async def snapshot_loop() -> None:
@@ -155,15 +195,19 @@ def handle_shot(shooter: Player, data: dict) -> None:
         return  # drop runaway clients
     shooter.last_shot = now
 
-    origin = data.get("p")
-    if not (isinstance(origin, list) and len(origin) >= 3):
-        origin = [shooter.x, shooter.y + 1.6, shooter.z]
-    direction = data.get("d")
-    if not (isinstance(direction, list) and len(direction) >= 3):
-        direction = [0.0, 0.0, -1.0]
+    origin = vec3(data.get("p")) or [shooter.x, shooter.y + 1.6, shooter.z]
+    direction = vec3(data.get("d")) or [0.0, 0.0, -1.0]
 
     v_id = data.get("victim")
-    victim = players.get(v_id) if isinstance(v_id, int) else None
+    victim = players.get(v_id) if isinstance(v_id, int) and not isinstance(v_id, bool) else None
+
+    # only accept the claimed victim if the ray really passes near them
+    if victim is not None and (
+        victim is shooter
+        or not victim.alive
+        or not ray_hits_point(origin, direction, (victim.x, victim.y + 1.0, victim.z), 1.1)
+    ):
+        victim = None
 
     push_all({
         "type": "shot",
@@ -173,28 +217,24 @@ def handle_shot(shooter: Player, data: dict) -> None:
         "victim": victim.id if victim else None,
     })
 
-    if victim is None or victim is shooter or not victim.alive:
-        return
-    dist = math.dist((shooter.x, shooter.y + 1, shooter.z),
-                     (victim.x, victim.y + 1, victim.z))
-    if dist > MAX_SHOT_RANGE:
+    if victim is None:
         return
 
     victim.hp -= DAMAGE
+    victim.hp = max(0, victim.hp)
+    push_all({"type": "hit", "shooter": shooter.id, "victim": victim.id,
+              "damage": DAMAGE, "hp": victim.hp})
+
     if victim.hp <= 0:
-        victim.hp = 0
         victim.alive = False
         shooter.kills += 1
-        push_all({"type": "hit", "shooter": shooter.id, "victim": victim.id,
-                  "damage": DAMAGE, "hp": 0})
         push_all({"type": "kill", "killer": shooter.id, "killerName": shooter.name,
                   "victim": victim.id, "victimName": victim.name})
         if victim.respawn_task and not victim.respawn_task.done():
             victim.respawn_task.cancel()
         victim.respawn_task = asyncio.create_task(respawn_player(victim))
-    else:
-        push_all({"type": "hit", "shooter": shooter.id, "victim": victim.id,
-                  "damage": DAMAGE, "hp": victim.hp})
+    return
+
 
 
 # --------------------------------------------------------------------------- #
@@ -207,25 +247,33 @@ async def reader_loop(ws, pl: Player) -> None:
             data = json.loads(raw)
         except Exception:
             continue
-        kind = data.get("type")
-        if kind == "state":
-            p = data.get("p")
-            if isinstance(p, list) and len(p) >= 3:
-                pl.x = clamp(float(p[0]), -MAP_HALF, MAP_HALF)
-                pl.y = max(0.0, float(p[1]))
-                pl.z = clamp(float(p[2]), -MAP_HALF, MAP_HALF)
-            ry = data.get("ry")
-            if isinstance(ry, (int, float)):
-                pl.ry = float(ry)
-        elif kind == "shoot":
-            handle_shot(pl, data)
+        if not isinstance(data, dict):
+            continue
+        try:
+            kind = data.get("type")
+            if kind == "state":
+                p = vec3(data.get("p"))
+                if p is not None:
+                    pl.x = clamp(p[0], -MAP_HALF, MAP_HALF)
+                    pl.y = max(0.0, p[1])
+                    pl.z = clamp(p[2], -MAP_HALF, MAP_HALF)
+                ry = data.get("ry")
+                if isinstance(ry, (int, float)) and not isinstance(ry, bool):
+                    ry = float(ry)
+                    if not math.isnan(ry) and not math.isinf(ry):
+                        pl.ry = ry
+            elif kind == "shoot":
+                handle_shot(pl, data)
+        except Exception:
+            # a malformed message must never take the connection down
+            continue
 
 
 async def writer_loop(ws, q: asyncio.Queue) -> None:
     while True:
-        obj = await q.get()
+        payload = await q.get()          # already-serialised JSON text
         try:
-            await ws.send(json.dumps(obj))
+            await ws.send(payload)
         except Exception:
             return
 
@@ -238,7 +286,7 @@ async def connection(ws) -> None:
     try:
         raw = await asyncio.wait_for(ws.recv(), timeout=10)
         data = json.loads(raw)
-        if data.get("type") != "join":
+        if not isinstance(data, dict) or data.get("type") != "join":
             await ws.send(json.dumps({"type": "error", "msg": "send {type:join} first"}))
             return
     except Exception:

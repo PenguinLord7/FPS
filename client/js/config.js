@@ -18,6 +18,10 @@ window.CFG = {
   sensY: 0.0021,
   pitchMax: 1.53,
 
+  // fallback aiming (used when pointer lock is unavailable, e.g. in an iframe):
+  // move the cursor away from the middle and the view keeps turning
+  steer: { yawRate: 2.2, pitchRate: 1.5, dead: 0.10 },
+
   // weapon
   weapon: {
     name: "VK-9 · PULSE RIFLE",
@@ -25,7 +29,15 @@ window.CFG = {
     cooldown: 0.14,
     range: 260,
     tracerColor: 0xffd54f,
-    tracerLife: 0.14,
+    // The bullet is a short streak that flies from the muzzle to the impact
+    // point and is then removed. Speed controls how long you see it, clamped so
+    // even a point-blank shot is visible for a moment and a cross-map shot
+    // still disappears after 0.2s.
+    tracerSpeed: 260,      // units / second
+    tracerLifeMin: 0.08,   // seconds (close range)
+    tracerLifeMax: 0.2,    // seconds (long range) — then it's gone
+    tracerStreak: 0.28,    // streak length as a fraction of the shot distance
+    tracerMax: 48,         // hard cap so bullets can never pile up
   },
 
   // Level blocks: { x, z, w, d, h } centred on (x, z), resting on y = 0.
